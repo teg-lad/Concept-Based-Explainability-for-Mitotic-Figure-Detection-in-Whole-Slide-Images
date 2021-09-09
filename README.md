@@ -1,5 +1,7 @@
 # CA4021 template repo
 
+*You should replace all of this file with a README describing your own project.*
+
 This is a template for CA4021 Data Science projects.
 
 The project dashboard is [here](https://projects.computing.dcu.ie/project.html?module=ca4021).
@@ -23,9 +25,6 @@ You can change the name of your repo on GitLab under:
 It looks like this:
 
 ![change-repo-path](repo-change-path.png "Change repo path.")
-
-
-You should replace all of this file with a README describing your own project.
 
 ## Additional resources
 
