@@ -9,13 +9,13 @@ The project dashboard is [here](https://projects.computing.dcu.ie/project.html?m
 
 ## 1. Create your repo
 
-Create your own fork of this repo.
+One person from your project team should fork this repo, then add other teammates as project members on GitLab.
 
 ## 2. Name your repo appropriately
 
-The name of your *repo* must match the pattern `2022-ca4021-XXXXXX`, where `XXXXXX` can be any text of your choice (such as your username).
+The name of your *repo* must match the pattern `2022-ca4021-XXXXXX`, where `XXXXXX` should be replaced with your usernames (e.g. 2022-ca400-sblott-mbezbradica).
 
-**Note** that the year should be set as appropriate to your year of study. For example, in the 2022/2023 academic year this would change to '2023-ca4021-mbezbradica'), in the 2023/2024 academic year this would change to '2024-ca4021-mbezbradica'), etc.
+**Note** that the year should be set as appropriate to your year of study. For example, in the 2022/2023 academic year this would change to '2023-ca4021-sblott-mbezbradica'), in the 2023/2024 academic year this would change to '2024-ca4021-sblott-mbezbradica'), etc.
 
 It is the *name of your repo* that matters (not the name of your project).
 
