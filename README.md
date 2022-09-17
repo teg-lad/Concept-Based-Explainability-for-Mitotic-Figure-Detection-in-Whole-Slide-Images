@@ -15,7 +15,7 @@ Create your own fork of this repo.
 
 The name of your *repo* must match the pattern `2022-ca4021-XXXXXX`, where `XXXXXX` can be any text of your choice (such as your username).
 
-**Note** that the year should be set as appropriate to your year of study. For example, in the 2022/2023 academic year this would change to '2023-ca4021-slittle'), in the 2023/2024 academic year this would change to '2024-ca4021-slittle'), etc.
+**Note** that the year should be set as appropriate to your year of study. For example, in the 2022/2023 academic year this would change to '2023-ca4021-mbezbradica'), in the 2023/2024 academic year this would change to '2024-ca4021-mbezbradica'), etc.
 
 It is the *name of your repo* that matters (not the name of your project).
 
