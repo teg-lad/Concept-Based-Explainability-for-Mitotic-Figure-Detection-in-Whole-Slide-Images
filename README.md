@@ -4,7 +4,8 @@
 
 ### Quick links
 
-[Data Loading](docs/initial_data_and_model_loading.ipynb)
++ [Project Proposal](docs/Adam_Tegart_19327493_FYP_Proposal.pdf)
 
++ [Data Loading](docs/initial_data_and_model_loading.ipynb)
 
 
