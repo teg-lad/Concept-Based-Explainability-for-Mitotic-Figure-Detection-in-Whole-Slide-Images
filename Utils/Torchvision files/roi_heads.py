@@ -707,22 +707,25 @@ class RoIHeads(nn.Module):
             # remove low scoring boxes
             inds = torch.where(scores > self.score_thresh)[0]
             boxes, scores, labels = boxes[inds], scores[inds], labels[inds]
+            # class_logits = class_logits[inds,:]
 
             # remove empty boxes
             keep = box_ops.remove_small_boxes(boxes, min_size=1e-2)
             boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+            # class_logits = class_logits[keep,:]
 
             # non-maximum suppression, independently done per class
             keep = box_ops.batched_nms(boxes, scores, labels, self.nms_thresh)
             # keep only topk scoring predictions
             keep = keep[: self.detections_per_img]
             boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+            class_logits = class_logits[keep,:]
 
             all_boxes.append(boxes)
             all_scores.append(scores)
             all_labels.append(labels)
 
-        return all_boxes, all_scores, all_labels
+        return all_boxes, all_scores, all_labels, class_logits
 
     def forward(
         self,
@@ -772,7 +775,7 @@ class RoIHeads(nn.Module):
             loss_classifier, loss_box_reg = fastrcnn_loss(class_logits, box_regression, labels, regression_targets)
             losses = {"loss_classifier": loss_classifier, "loss_box_reg": loss_box_reg}
 
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
+            boxes, scores, labels, class_logits = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
                 result.append(
@@ -784,7 +787,7 @@ class RoIHeads(nn.Module):
                 )
 
         else:
-            boxes, scores, labels = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
+            boxes, scores, labels, class_logits = self.postprocess_detections(class_logits, box_regression, proposals, image_shapes)
             num_images = len(boxes)
             for i in range(num_images):
                 result.append(
@@ -885,4 +888,4 @@ class RoIHeads(nn.Module):
                     r["keypoints_scores"] = kps
             losses.update(loss_keypoint)
 
-        return result, losses
+        return result, class_logits, losses
