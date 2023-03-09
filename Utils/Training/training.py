@@ -141,7 +141,7 @@ def evaluate(model, data_loader_test, epoch, device, writer):
             targets = [{k: v.to(device) for k, v in t.items() if k in ["boxes", "labels"]} for t in targets]
 
             # Get the loss and predictions back from the model.
-            losses, predictions = model(images, targets)
+            losses, predictions, _ = model(images, targets)
 
             # Sum the losses to get the loss for this batch and add it to the total.
             losses_summed = sum(loss for loss in losses.values()).item()
