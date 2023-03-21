@@ -5,10 +5,12 @@ ConceptDiscovery class that is able to discover the concepts belonging to one
 of the possible classification labels of the classification task of a network
 and calculate each concept's TCAV score..
 """
-from multiprocessing import dummy as multiprocessing
+# from multiprocessing import dummy as multiprocessing
 import sys
 import os
 from pathlib import Path
+import pickle
+
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
@@ -17,7 +19,7 @@ import skimage.segmentation as segmentation
 import sklearn.cluster as cluster
 import sklearn.metrics.pairwise as metrics
 import torch
-# from tcav import cav
+
 from Utils.ACE.ace_helpers import *
 from Utils.TCAV import cav, tcav
 
@@ -82,7 +84,6 @@ class ConceptDiscovery(object):
                            nework's preprocessing stage.
     """
         self.model = model
-        self.model.create_feature_extractor(bottlenecks)
         self.target_class = target_class
         self.num_random_exp = num_random_exp
         if isinstance(bottlenecks, str):
@@ -305,14 +306,15 @@ class ConceptDiscovery(object):
     """
     
         output = []
-        for i in tqdm(range(int(img_paths.shape[0] / bs) + 1), total=int(img_paths.shape[0] / bs) + 1, desc="Calculating activations for superpixels"):
+        for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs), desc="Calculating activations for superpixels"):
             
             # Load the images we need
             if paths:
                 imgs = [np.array(Image.open(img)) for img in img_paths[i * bs:(i + 1) * bs]]
+
             else:
                 imgs = img_paths
-                
+            
             output.append(
                 self.model.run_examples(np.array(imgs)))
 
@@ -396,6 +398,14 @@ class ConceptDiscovery(object):
                     ord=2,
                     axis=-1)
         return asg, cost, centers
+    
+    def discovery_images_size(self, target_class, num_discovery_imgs):
+        discovery_dir = self.source_dir / target_class
+        
+        
+        discovery_images = np.array(list(discovery_dir.iterdir()))
+    
+        return min(len(discovery_images), num_discovery_imgs)
 
     def discover_concepts(self, concept_dir,
                           method='KM',
@@ -429,6 +439,8 @@ class ConceptDiscovery(object):
             
         self.dic = {}  ## The main dictionary of the ConceptDiscovery class.
         
+        discovery_size = self.discovery_images_size(self.target_class, self.num_discovery_imgs)
+        
         if activations is None or set(self.bottlenecks) != set(activations.keys()):
             
             superpixels_dir = concept_dir / "superpixels"
@@ -437,7 +449,7 @@ class ConceptDiscovery(object):
             patches_dir = concept_dir / "patches"
             patch_images = np.array(list(patches_dir.iterdir()))
             
-            activations = self._get_activations(superpixel_images)
+            activations = self._get_activations(superpixel_images, bs=4)
     
         # Fill activations
         for bn in self.bottlenecks:
@@ -453,7 +465,6 @@ class ConceptDiscovery(object):
                     concept_costs = bn_dic['cost'][label_idxs]
                     concept_idxs = label_idxs[np.argsort(concept_costs)[:self.max_imgs]]
                     concept_image_numbers = set([int(p.name.split("_")[0]) for p in patch_images[label_idxs]])
-                    discovery_size = len(self.discovery_images)
                     highly_common_concept = len(
                         concept_image_numbers) > 0.5 * len(label_idxs)
                     mildly_common_concept = len(
@@ -479,6 +490,18 @@ class ConceptDiscovery(object):
             bn_dic.pop('label', None)
             bn_dic.pop('cost', None)
             self.dic[bn] = bn_dic
+        
+        self.save_concept_dict()
+
+
+    def save_concept_dict(self):
+        with open(self.cav_dir / 'concept_dict.pkl', 'wb') as handle:
+            pickle.dump(self.dic, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
+    def load_concept_dict(self):
+        with open(self.cav_dir / 'concept_dict.pkl', 'rb') as handle:
+            self.dic = pickle.load(handle)
+        
 
     def _random_concept_activations(self, bottleneck, random_concept):
         """Wrapper for computing or loading activations of random concepts.
@@ -503,7 +526,7 @@ class ConceptDiscovery(object):
             del rnd_imgs
         return np.load(rnd_acts_path).squeeze()
 
-    def _calculate_cav(self, c, r, bn, act_c, ow, directory=None):
+    def _calculate_cav(self, c, r, bn, act_c, act_r, ow, directory=None):
         """Calculates a sinle cav for a concept and a one random counterpart.
 
     Args:
@@ -519,15 +542,15 @@ class ConceptDiscovery(object):
     """
         if directory is None:
             directory = self.cav_dir
-        act_r = self._random_concept_activations(bn, r)
-        concepts, layer_name, save_path, hparams=None, cav_dir=None, activations=None, overwrite=False
+#         act_r = self._random_concept_activations(bn, r)
+
         cav_instance = cav.load_or_train_cav([c, r], bn, directory, 
                                              activations={c: {bn: act_c}, r: {bn: act_r}},
                                              overwrite=ow)
 
         return cav_instance.accuracies['overall']
 
-    def _concept_cavs(self, bn, concept, activations, randoms=None, ow=True):
+    def _concept_cavs(self, bn, concept, activations, random_activations, randoms=None, ow=True):
         """Calculates CAVs of a concept versus all the random counterparts.
 
     Args:
@@ -545,18 +568,20 @@ class ConceptDiscovery(object):
             randoms = [
                 'random500_{}'.format(i) for i in np.arange(self.num_random_exp)
             ]
+        rnd = "Random"
+        
         if self.num_workers:
             pool = multiprocessing.Pool(20)
             accs = pool.map(
-                lambda rnd: self._calculate_cav(concept, rnd, bn, activations, ow),
+                lambda rnd: self._calculate_cav(concept, rnd, bn, activations, random_activations, ow),
                 randoms)
         else:
-            accs = []
-            for rnd in randoms:
-                accs.append(self._calculate_cav(concept, rnd, bn, activations, ow))
+#             accs = []
+#             for rnd in randoms:
+            accs = self._calculate_cav(concept, rnd, bn, activations, random_activations,  ow)
         return accs
 
-    def cavs(self, min_acc=0., ow=True):
+    def cavs(self, min_acc=0, ow=True):
         """Calculates cavs for all discovered concepts.
 
     This method calculates and saves CAVs for all the discovered concepts
@@ -574,32 +599,38 @@ class ConceptDiscovery(object):
         acc = {bn: {} for bn in self.bottlenecks}
         concepts_to_delete = []
         
-        target_class_acts_all = _get_activations(self.discovery_images, paths=False)
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+            
+#         discovery_dir = self.source_dir / self.target_class
+#         discovery_images = np.array(list(discovery_dir.iterdir()))
+        
+#         target_class_acts_all = self._get_activations(discovery_images, bs=1)
         
         # Get all images in the random concept folder
         # List of all random images in the random concept folder.
         # random_concept_imgs = iter over directory
-        rnd_acts_all = _get_activations(self.random_concept)
+        rnd_acts_all = self._get_activations(self.random_imgs)
         
         for bn in self.bottlenecks:
+            
+#             target_class_acts = target_class_acts_all[bn]
+#             acc[bn][self.target_class] = self._concept_cavs(
+#                 bn, self.target_class, target_class_acts, ow=ow)
+            
+            rnd_acts = rnd_acts_all[bn]
+#             acc[bn][self.random_concept] = self._concept_cavs(
+#                 bn, self.random_concept, rnd_acts, ow=ow)
             
             for concept in self.dic[bn]['concepts']:
                 
                 concept_imgs = self.dic[bn][concept]['images']
-                concept_acts_all = _get_activations(concept_imgs)
+                concept_acts_all = self._get_activations(concept_imgs)
                 
                 concept_acts = concept_acts_all[bn]
-                acc[bn][concept] = self._concept_cavs(bn, concept, concept_acts, ow=ow)
+                acc[bn][concept] = self._concept_cavs(bn, concept, concept_acts, rnd_acts, ow=ow)
                 if np.mean(acc[bn][concept]) < min_acc:
                     concepts_to_delete.append((bn, concept))
-                    
-            target_class_acts = target_class_acts_all[bn]
-            acc[bn][self.target_class] = self._concept_cavs(
-                bn, self.target_class, target_class_acts, ow=ow)
-            
-            rnd_acts = rnd_acts_all[bn]
-            acc[bn][self.random_concept] = self._concept_cavs(
-                bn, self.random_concept, rnd_acts, ow=ow)
             
         for bn, concept in concepts_to_delete:
             self.delete_concept(bn, concept)
@@ -620,11 +651,12 @@ class ConceptDiscovery(object):
     """
         if directory is None:
             directory = self.cav_dir
-        params = tf.contrib.training.HParams(model_type='linear', alpha=.01)
-        cav_key = cav.CAV.cav_key([c, r], bn, params.model_type, params.alpha)
-        cav_path = os.path.join(self.cav_dir, cav_key.replace('/', '.') + '.pkl')
-        vector = cav.CAV.load_cav(cav_path).cavs[0]
-        return np.expand_dims(vector, 0) / np.linalg.norm(vector, ord=2)
+        
+        loaded_cav = cav.load_or_train_cav([c,r], bn, directory)
+    
+        vector = loaded_cav.get_cav(c)
+        
+        return vector
 
     def _sort_concepts(self, scores):
         for bn in self.bottlenecks:
@@ -636,8 +668,9 @@ class ConceptDiscovery(object):
                 concepts.append(self.dic[bn]['concepts'][idx])
             self.dic[bn]['concepts'] = concepts
 
-    def _return_gradients(self, images):
-        """For the given images calculates the gradient tensors.
+    def _return_gradients(self, images, paths=True):
+        """For the given images, calculate a dictionary of gradients for each layer.
+        The corresponding images and detection info is returned.
 
     Args:
       images: Images for which we want to calculate gradients.
@@ -645,17 +678,43 @@ class ConceptDiscovery(object):
     Returns:
       A dictionary of images gradients in all bottleneck layers.
     """
-
-        gradients = {}
+        
+        # Initialize variables to store the gradients and info.
+        gradients = {k: [] for k in self.bottlenecks} 
+        total_info = []
+        
+        # Get the class id for the label we have.
         class_id = self.model.label_to_id(self.target_class.replace('_', ' '))
-        for bn in self.bottlenecks:
-            acts = get_acts_from_images(images, self.model, bn)
-            bn_grads = np.zeros((acts.shape[0], np.prod(acts.shape[1:])))
-            for i in range(len(acts)):
-                bn_grads[i] = self.model.get_gradient(
-                    acts[i:i + 1], [class_id], bn).reshape(-1)
-            gradients[bn] = bn_grads
-        return gradients
+        
+        # Loop through all of the images, one at a time.
+        for i in tqdm(range(len(images)), total=len(images), desc="Calculating gradients"):
+            
+            # Load the image we need
+            if paths:
+                img = [np.array(Image.open(images[i]))]
+            else:
+                img = images[i]
+            
+            # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
+            img_gradients, detection_info =  self.model.get_gradient(np.array(img), class_id)
+            
+            # Add the information regarding the current info to the detection info.
+            current_info = [f"{images[i].name}_{part}" for part in detection_info]
+            
+            # Add this info to the total so we can correspond them to the gradients.
+            total_info = total_info + current_info
+            
+            # Iterate through the layers we have and add the corresponding gradients to our total for the layer.
+            for layer, vals in img_gradients.items():
+                
+                # Add these gradients to the total we have collected so far
+                gradients[layer] = gradients[layer] + vals
+
+        # Convert the lists to numpy arrays
+        for k, v in gradients.items():
+            gradients[k] = np.array(v)
+
+        return gradients, total_info
 
     def _tcav_score(self, bn, concept, rnd, gradients):
         """Calculates and returns the TCAV score of a concept.
@@ -694,11 +753,16 @@ class ConceptDiscovery(object):
     """
 
         tcav_scores = {bn: {} for bn in self.bottlenecks}
-        randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
+        
+#         randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
+        
         if tcav_score_images is None:  # Load target class images if not given
-            raw_imgs = self.load_concept_imgs(self.target_class, 2 * self.max_imgs)
-            tcav_score_images = raw_imgs[-self.max_imgs:]
+            files = self.source / target_class
+            tcav_score_images = list(files.iterdir())
+        
+        # Accept image paths from target class folder?
         gradients = self._return_gradients(tcav_score_images)
+        
         for bn in self.bottlenecks:
             for concept in self.dic[bn]['concepts'] + [self.random_concept]:
                 def t_func(rnd):
@@ -708,7 +772,7 @@ class ConceptDiscovery(object):
                     pool = multiprocessing.Pool(self.num_workers)
                     tcav_scores[bn][concept] = pool.map(lambda rnd: t_func(rnd), randoms)
                 else:
-                    tcav_scores[bn][concept] = [t_func(rnd) for rnd in randoms]
+                    tcav_scores[bn][concept] = self._tcav_score(bn, concept, "Random", gradients)
         if test:
             self.test_and_remove_concepts(tcav_scores)
         if sort:

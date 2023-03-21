@@ -14,44 +14,124 @@ from tqdm import tqdm
 from sklearn import linear_model
 from sklearn.model_selection import cross_val_score
 import torch
-from torchvision.models.feature_extraction import create_feature_extractor
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from pathlib import Path
 
 import torchvision
 
+from Utils.model_wrapper import ModelWrapper
+
 
 class MyModel():
     
-    def __init__(self):
-        self.model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+    def __init__(self, model, layers):
+        if model == "mitotic":
+            # load a model pre-trained on COCO
+            model = torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
+
+            # replace the classifier with a new one, that has
+            # num_classes which is user-defined
+            num_classes = 2  # 1 class (mitotic figure) + background
+
+            # get number of input features for the classifier
+            in_features = model.roi_heads.box_predictor.cls_score.in_features
+
+            # replace the pre-trained head with a new one
+            model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+            
+            # Load in the best model by specifying the path to the save.
+            checkpoint = torch.load("D:/DS/DS4/Project/model_saves/2023_03_04_17_22_33_11.pth")
+
+            # Take the model that we have already initialized and load the state_dict into it.
+            model.load_state_dict(checkpoint["model_state_dict"])
+            
+            self.model = ModelWrapper(model, layers)
+        else:
+            self.model = ModelWrapper(torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(weights="DEFAULT"), layers)
+    
+        self.model.eval()
+        
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.feature_extractor = None
+        self.model.to(self.device)
 
-    def create_feature_extractor(self, bottlenecks):
-        self.feature_extractor = create_feature_extractor(self.model.backbone, bottlenecks)
-        self.feature_extractor = self.feature_extractor.to(self.device)
-
-    def run_examples(self, imgs, bn=None):
+    def run_examples(self, imgs, get_mean=True, bn=None):
 
         tensor_imgs = torch.from_numpy(imgs).float()
 
         if len(tensor_imgs.shape) < 4:    
             tensor_imgs = tensor_imgs[None, :]
-
+        
+        
         tensor_imgs = tensor_imgs.permute(0, 3, 1, 2)
         
         tensor_imgs = tensor_imgs.to(self.device)
 
         with torch.no_grad():
-            out = self.feature_extractor(tensor_imgs)
-        
-        flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in out.items()}
+            self.model(tensor_imgs)
+            acts = self.model.intermediate_activations
+            
+        if get_mean:
+            flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in acts.items()}
+        else:
+            flattened = {k: torch.flatten(v.detach().cpu(), start_dim=1) for k, v in acts.items()}
+            
         output = {k: list(v.numpy()) for k, v in flattened.items()}
         
-        if bn:
-            return output[bn]
-        else:  
-            return {k: list(v.numpy()) for k, v in flattened.items()}
+        return {k: list(v.numpy()) for k, v in flattened.items()}
+    
+    def label_to_id(self, label):
+        default = {"tennis racket": 43}
+        return default[label]
+    
+    def get_gradient(self, imgs, class_id, get_mean=True, return_info=True):
+            
+        tensor_imgs = torch.from_numpy(imgs).float()
+
+        if len(tensor_imgs.shape) < 4:    
+            tensor_imgs = tensor_imgs[None, :]
+        
+        tensor_imgs = tensor_imgs.permute(0, 3, 1, 2)
+        
+        tensor_imgs = tensor_imgs.to(self.device)
+
+        self.model.to(self.device)
+        self.model(tensor_imgs)
+        
+        gradients, info = self.model.generate_gradients(class_id)
+        
+        if get_mean:
+            flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in gradients.items()}
+        else:
+            flattened = {k: torch.flatten(v.detach().cpu(), start_dim=1) for k, v in gradients.items()}
+            
+        output = {k: list(v.numpy()) for k, v in flattened.items()}
+        
+        return output, info
+        
+        
+            
+#         flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in out.items()}
+#         output = {k: list(v.numpy()) for k, v in flattened.items()}
+        
+#         if bn:
+#             return output[bn]
+#         else:  
+#             return {k: list(v.numpy()) for k, v in flattened.items()}
+    
+    def return_grads(self, bns):
+        grads = {}
+        
+        for bn in bns:
+            
+            body_attribute, layer_attribute, layer_number_attribute, component_atribute = bn.split(".")
+            body = getattr(self.model.backbone, body_attribute)
+            layer = getattr(body, layer_attribute)
+            layer_number = layer[int(layer_number_attribute)]
+            component = getattr(layer_number, component_atribute)
+            grads[bn] = component.weight.grad.cpu().detach().numpy()
+
+        return grads
+            
 
 def load_image_from_file(filename, shape):
     """Given a filename, try to open the file. If failed, return None.
@@ -458,8 +538,8 @@ def save_concepts(cd, concepts_dir, bs=32):
                 superpixels = np.array([np.array(Image.open(img)) for img in cd.dic[bn][concept]['images'][i * bs:(i + 1) * bs]])
                 # superpixels = (np.clip(loaded_superpixels, 0, 1) * 256).astype(np.uint8)
 
-                Path(patches_dir).mkdir(parents=True)
-                Path(images_dir).mkdir(parents=True)
+                Path(patches_dir).mkdir(parents=True, exist_ok=True)
+                Path(images_dir).mkdir(parents=True, exist_ok=True)
 
                 image_numbers = cd.dic[bn][concept]['image_numbers'][i * bs:(i + 1) * bs]
                 image_addresses = [images_dir / f"{img_num}.png" for img_num in image_numbers]
@@ -486,3 +566,6 @@ def save_images(addresses, images):
     assert len(addresses) == len(images), 'Invalid number of addresses'
     for address, image in zip(addresses, images):
         Image.fromarray(image).save(address, format='PNG')
+
+def ceildiv(a, b):
+    return -(a // -b)
