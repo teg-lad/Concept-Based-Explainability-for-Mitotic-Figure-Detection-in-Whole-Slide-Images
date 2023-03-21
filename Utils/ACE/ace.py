@@ -19,6 +19,7 @@ import skimage.segmentation as segmentation
 import sklearn.cluster as cluster
 import sklearn.metrics.pairwise as metrics
 import torch
+import torchvision.transforms as T
 
 from Utils.ACE.ace_helpers import *
 from Utils.TCAV import cav, tcav
@@ -46,7 +47,8 @@ class ConceptDiscovery(object):
                  min_imgs=20,
                  num_discovery_imgs=40,
                  num_workers=20,
-                 average_image_value=117):
+                 average_image_value=117,
+                 resize_dims=(512, 512)):
         """Runs concept discovery for a given class in a trained model.
 
     For a trained classification model, the ConceptDiscovery class first
@@ -101,6 +103,7 @@ class ConceptDiscovery(object):
         self.num_discovery_imgs = num_discovery_imgs
         self.num_workers = num_workers
         self.average_image_value = average_image_value
+        self.resize_dims = resize_dims
 
     def load_concept_imgs(self, concept, max_imgs=1000):
         """Loads all colored images of a concept.
@@ -122,7 +125,8 @@ class ConceptDiscovery(object):
             max_imgs=max_imgs,
             return_filenames=False,
             do_shuffle=False,
-            run_parallel=(self.num_workers > 0), # image.shape here
+            run_parallel=(self.num_workers > 0),
+            shape=self.resize_dims,# image.shape here
             num_workers=self.num_workers)
 
     def create_patches(self, concept_dir, method='slic', discovery_images=None,
@@ -288,11 +292,10 @@ class ConceptDiscovery(object):
         ones = np.where(mask == 1)
         h1, h2, w1, w2 = ones[0].min(), ones[0].max(), ones[1].min(), ones[1].max()
         image = Image.fromarray((patch[h1:h2, w1:w2] * 255).astype(np.uint8))
-        image_resized = np.array(image.resize((299, 299), # image shape here
-                                              Image.BICUBIC)).astype(float) / 255
+        image_resized = np.array(image.resize(self.resize_dims, Image.BICUBIC)).astype(float) / 255
         return image_resized, patch
 
-    def _get_activations(self, img_paths, paths=True, bs=8, channel_mean=None):
+    def _get_activations(self, img_paths, paths=True, bs=2, channel_mean=None):
         """Returns activations of a list of imgs.
 
     Args:
@@ -691,12 +694,14 @@ class ConceptDiscovery(object):
             
             # Load the image we need
             if paths:
-                img = [np.array(Image.open(images[i]))]
+                img = [T.ToTensor()(Image.open(images[i]).resize(self.resize_dims, Image.BICUBIC))]
             else:
                 img = images[i]
             
             # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
-            img_gradients, detection_info =  self.model.get_gradient(np.array(img), class_id)
+            img_gradients, detection_info =  self.model.get_gradient(img, class_id)
+            
+            del img
             
             # Add the information regarding the current info to the detection info.
             current_info = [f"{images[i].name}_{part}" for part in detection_info]
@@ -711,8 +716,8 @@ class ConceptDiscovery(object):
                 gradients[layer] = gradients[layer] + vals
 
         # Convert the lists to numpy arrays
-        for k, v in gradients.items():
-            gradients[k] = np.array(v)
+#         for k, v in gradients.items():
+#             gradients[k] = np.array(v)
 
         return gradients, total_info
 
@@ -754,10 +759,13 @@ class ConceptDiscovery(object):
 
         tcav_scores = {bn: {} for bn in self.bottlenecks}
         
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+        
 #         randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
         
         if tcav_score_images is None:  # Load target class images if not given
-            files = self.source / target_class
+            files = self.source_dir / self.target_class
             tcav_score_images = list(files.iterdir())
         
         # Accept image paths from target class folder?

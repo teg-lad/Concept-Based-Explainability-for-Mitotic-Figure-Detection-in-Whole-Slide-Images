@@ -25,6 +25,7 @@ from Utils.model_wrapper import ModelWrapper
 class MyModel():
     
     def __init__(self, model, layers):
+        
         if model == "mitotic":
             # load a model pre-trained on COCO
             model = torchvision.models.detection.fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
@@ -84,18 +85,22 @@ class MyModel():
         return default[label]
     
     def get_gradient(self, imgs, class_id, get_mean=True, return_info=True):
-            
-        tensor_imgs = torch.from_numpy(imgs).float()
-
-        if len(tensor_imgs.shape) < 4:    
-            tensor_imgs = tensor_imgs[None, :]
         
-        tensor_imgs = tensor_imgs.permute(0, 3, 1, 2)
+        tensor_imgs = torch.stack(imgs)
+        
+        del imgs
+
+#         if len(tensor_imgs.shape) < 4:    
+#             tensor_imgs = tensor_imgs[None, :]
+        
+#         tensor_imgs = tensor_imgs.permute(0, 3, 1, 2)
         
         tensor_imgs = tensor_imgs.to(self.device)
 
         self.model.to(self.device)
         self.model(tensor_imgs)
+        
+        del tensor_imgs
         
         gradients, info = self.model.generate_gradients(class_id)
         
