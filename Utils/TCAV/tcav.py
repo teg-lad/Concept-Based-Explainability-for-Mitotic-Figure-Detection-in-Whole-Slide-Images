@@ -1,6 +1,6 @@
 
 import numpy as np
-from cav import CAV
+from Utils.TCAV.cav import CAV
 import os
 import torch
 from tqdm import tqdm

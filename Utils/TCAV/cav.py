@@ -1,7 +1,9 @@
 
+import pickle
 import numpy as np
 from pathlib import Path
 from sklearn.linear_model import SGDClassifier, LogisticRegression
+from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 
@@ -37,22 +39,26 @@ class CAV(object):
         else:
             self.hparams = {'model_type':'linear', 'alpha':.01}
     
-    def cav_filename():
-        concepts = "_".join([str(c) for c in concepts])
+    def cav_filename(self):
+        concepts = "_".join([str(c) for c in self.concepts])
+        model_type = self.hparams["model_type"]
+        alpha = self.hparams["alpha"]
         
-        return f"{concepts}_{self.layer_name}_{self.hparams["model_type"]_{"alpha"}}"
+        return f"{concepts}_{self.layer_name}_{model_type}_{alpha}.pkl"
 
     def train(self, activations):
         data, labels, label_concept = flatten_activations_and_get_labels(self.concepts, self.layer_name, activations)
+        # print("Data shape:", data.shape)
 
         # default setting is One-Vs-All
-        assert self.model_type in ['linear', 'logistic']
+        assert self.hparams["model_type"] in ['linear', 'logistic']
         if self.hparams["model_type"] == 'linear':
             model = SGDClassifier(alpha=self.hparams["alpha"])
         else:
             model = LogisticRegression()
 
-        x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.33, stratify=labels)
+        x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.20, stratify=labels)
+        
         model.fit(x_train, y_train)
         
         # Get accuracy
@@ -61,7 +67,8 @@ class CAV(object):
         num_classes = max(labels) + 1
         acc = {}
         num_correct = 0
-        for class_id in range(num_classes):
+        
+        for class_id in range(int(num_classes)):
             
             # get indices of all test data that has this class.
             idx = (y_test == class_id)
@@ -90,8 +97,8 @@ class CAV(object):
         
         self.save_cav()
 
-    def get_cav(self):
-        return self.cav
+    def get_cav(self, concept):
+        return self.cavs[self.concepts.index(concept)]
     
     def save_cav(self):
         """Save a dictionary of this CAV to a pickle."""
@@ -106,7 +113,7 @@ class CAV(object):
             }
         
         if self.save_path is not None:
-            with open(self.save_path, 'w') as pkl_file:
+            with open(self.save_path / self.cav_filename(), 'wb') as pkl_file:
                 pickle.dump(save_dict, pkl_file)
     
     def load_cav(cav_path):
@@ -131,9 +138,9 @@ def load_or_train_cav(concepts, layer_name, save_path, hparams=None, activations
     cav_instance = CAV(concepts, layer_name, save_path, hparams)
     
     if save_path is not None:
-        cav_path = Path(save_path) / cav_instance.cav_key()
+        cav_path = Path(save_path) / cav_instance.cav_filename()
         
-    if not overwrite and cav_path.isfile():
+    if not overwrite and cav_path.is_file():
         cav_instance = CAV.load_cav(cav_path)
         return cav_instance
 
