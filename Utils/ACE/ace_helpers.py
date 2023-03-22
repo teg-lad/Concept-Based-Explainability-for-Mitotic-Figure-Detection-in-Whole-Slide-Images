@@ -4,6 +4,7 @@ from multiprocessing import dummy as multiprocessing
 import sys
 import os
 import copy
+import shutil
 # from matplotlib import pyplot as plt
 # import matplotlib.gridspec as gridspec
 # import tcav.model as model
@@ -136,7 +137,35 @@ class MyModel():
             grads[bn] = component.weight.grad.cpu().detach().numpy()
 
         return grads
-            
+
+def create_directories(output_path, remove_old=True):
+    # Create an output directory for our data
+    output = Path(output_path)
+
+    # Create the relevant sub-directories.
+    discovered_concepts_dir = output / 'concepts/'
+    results_dir = output / 'results/'
+    cavs_dir = output / 'cavs/'
+    activations_dir = output / 'acts/'
+    results_summaries_dir = output / 'results_summaries/'
+    
+    
+    # If the directory exists and we want it deleted, delete it.
+    if output.exists() and remove_old:
+        shutil.rmtree(output)
+
+    # Make all of the directories
+    discovered_concepts_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    cavs_dir.mkdir(parents=True, exist_ok=True)
+    activations_dir.mkdir(parents=True, exist_ok=True)
+    results_summaries_dir.mkdir(parents=True, exist_ok=True)
+
+def return_param(param_dict, param_name, default):
+    if param_name in param_dict.keys():
+        return param_dict[param_name]
+    else:
+        return default
 
 def load_image_from_file(filename, shape):
     """Given a filename, try to open the file. If failed, return None.
@@ -523,17 +552,16 @@ def save_ace_report(cd, accs, scores, address):
         f.write(report)
 
 
-def save_concepts(cd, concepts_dir, bs=32):
+def save_concepts(cd, bs=32):
     """Saves discovered concept's images or patches.
 
   Args:
     cd: The ConceptDiscovery instance the concepts of which we want to save
-    concepts_dir: The directory to save the concept images
   """
     for bn in cd.bottlenecks:
         for concept in cd.dic[bn]['concepts']:
-            patches_dir = Path(concepts_dir, bn, concept + '_patches')
-            images_dir = Path(concepts_dir, bn, concept)
+            patches_dir = Path(cd.discovered_concepts_dir, bn, concept + '_patches')
+            images_dir = Path(cd.discovered_concepts_dir, bn, concept)
             
             for i in range(int(len(cd.dic[bn][concept]['patches']) / bs) + 1):
             

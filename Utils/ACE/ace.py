@@ -1,15 +1,17 @@
-"""ACE library.
+"""ACE script.
 
-Library for discovering and testing concept activation vectors. It contains
-ConceptDiscovery class that is able to discover the concepts belonging to one
-of the possible classification labels of the classification task of a network
-and calculate each concept's TCAV score..
+Script for discovering and testing concept activation vectors. It contains the
+ConceptDiscovery class that aims to discover potential concepts for the target class.
+It then generates CAVs for these potential concepts and performs tests to determine
+how meaningful they are as well as their statistical significance.
 """
-# from multiprocessing import dummy as multiprocessing
+
 import sys
 import os
 from pathlib import Path
 import pickle
+import shutil
+import random
 
 import numpy as np
 from PIL import Image
@@ -26,221 +28,278 @@ from Utils.TCAV import cav, tcav
 
 
 class ConceptDiscovery(object):
-    """Discovering and testing concepts of a class.
-
-  For a trained network, it first discovers the concepts as areas of the iamges
-  in the class and then calculates the TCAV score of each concept. It is also
-  able to transform images from pixel space into concept space.
-  """
-
-    def __init__(self,
-                 model,
-                 target_class,
-                 random_concept,
-                 bottlenecks,
-                 source_dir,
-                 activation_dir,
-                 cav_dir,
-                 num_random_exp=2,
-                 channel_mean=True,
-                 max_imgs=40,
-                 min_imgs=20,
-                 num_discovery_imgs=40,
-                 num_workers=20,
-                 average_image_value=117,
-                 resize_dims=(512, 512)):
-        """Runs concept discovery for a given class in a trained model.
-
-    For a trained classification model, the ConceptDiscovery class first
-    performs unsupervised concept discovery using examples of one of the classes
-    in the network.
-
-    Args:
-      model: A trained classification model on which we run the concept
-             discovery algorithm
-      target_class: Name of the one of the classes of the network
-      random_concept: A concept made of random images (used for statistical
-                      test) e.g. "random500_199"
-      bottlenecks: a list of bottleneck layers of the model for which the cocept
-                   discovery stage is performed
-      source_dir: This directory that contains folders with images of network's
-                  classes.
-      activation_dir: directory to save computed activations
-      cav_dir: directory to save CAVs of discovered and random concepts
-      num_random_exp: Number of random counterparts used for calculating several
-                      CAVs and TCAVs for each concept (to make statistical
-                        testing possible.)
-      channel_mean: If true, for the unsupervised concept discovery the
-                    bottleneck activations are averaged over channels instead
-                    of using the whole acivation vector (reducing
-                    dimensionality)
-      max_imgs: maximum number of images in a discovered concept
-      min_imgs : minimum number of images in a discovered concept for the
-                 concept to be accepted
-      num_discovery_imgs: Number of images used for concept discovery. If None,
-                          will use max_imgs instead.
-      num_workers: if greater than zero, runs methods in parallel with
-        num_workers parallel threads. If 0, no method is run in parallel
-        threads.
-      average_image_value: The average value used for mean subtraction in the
-                           nework's preprocessing stage.
     """
+    Class for discovering and testing potential concepts for a class.
+
+    For a trained network, it first discovers the concepts as areas of the images
+    in the class and then calculates the TCAV score of each concept. It is also
+    able to transform images from pixel space into concept space.
+    """
+
+    def __init__(self, model, target_class, bottlenecks, source_dir, output_dir, num_random_exp=2,
+                 channel_mean=True, max_imgs=40, min_imgs=20, num_discovery_imgs=40, average_image_value=117,
+                 resize_dims=(512, 512)):
+        """
+
+        :param model: A trained classification model on which we run the concept discovery algorithm.
+        :param target_class: Name of the one of the classes of the network.
+        :param bottlenecks: A list of bottleneck layers of the model for which the concept discovery stage is performed.
+        :param source_dir: This directory that contains folders with images of network's classes.
+        :param output_dir: Directory to save output to.
+        :param num_random_exp: Number of random counterparts used for calculating several CAVs and TCAVs for each
+        concept (to make statistical testing possible).
+        :param channel_mean: If true, for the unsupervised concept discovery the bottleneck activations are averaged
+        over channels instead of using the whole acivation vector (reducing dimensionality).
+        :param max_imgs: Maximum number of images in a discovered concept.
+        :param min_imgs: Minimum number of images in a discovered concept for the concept to be accepted.
+        :param num_discovery_imgs: Number of images used for concept discovery. If None, will use max_imgs instead.
+        :param average_image_value: The average value used for mean subtraction in the network's preprocessing stage.
+        :param resize_dims: A tuple defining the height and weight to resize images to.
+        """
+
+        # Save the model and target class to an instance variable.
         self.model = model
         self.target_class = target_class
+
+        # Save the number of random experiments.
         self.num_random_exp = num_random_exp
-        if isinstance(bottlenecks, str):
-            bottlenecks = [bottlenecks]
+
+        # Save the bottlenecks
         self.bottlenecks = bottlenecks
+
+        # Save the directories we will need to access
         self.source_dir = Path(source_dir)
-        self.activation_dir = activation_dir
-        self.cav_dir = cav_dir
+        
+        output_dir = Path(output_dir)
+        self.discovered_concepts_dir = output_dir / 'concepts/'
+        self.results_dir = output_dir / 'results/'
+        self.cav_dir = output_dir / 'cavs/'
+        self.activation_dir = output_dir / 'acts/'
+        self.results_summaries_dir = output_dir / 'results_summaries/'
+
+        # Save channel mean option.
         self.channel_mean = channel_mean
-        self.random_concept = random_concept
+
+        # Save image details
         self.max_imgs = max_imgs
         self.min_imgs = min_imgs
         if num_discovery_imgs is None:
             num_discovery_imgs = max_imgs
         self.num_discovery_imgs = num_discovery_imgs
-        self.num_workers = num_workers
+
+        # Save the average image value.
         self.average_image_value = average_image_value
+
+        # Save the tuple that defines the dimensions to resize images to.
         self.resize_dims = resize_dims
 
+    def run_all(self):
+        pass
+    
+    def initialize_random_concept_and_samples(self):
+        """
+        This function create a folder for a random concept and creates random samples of
+        from all of the superpixels for training the discovered concepts against.
+        """
+        
+        # Get the list of superpixels.
+        superpixels = self.discovered_concepts_dir / "superpixels"
+        list_of_files = list(superpixels.iterdir())
+        
+        # Create random selection for random concept.
+        random.seed(42)
+        self.random_concept_imgs = np.array(random.sample(list_of_files, self.min_imgs))
+        
+        # Save these images to a subfolder called Concept in Random
+        destination = img.parent.parent / "Random" / "Concept"
+        destination.mkdir(parents=True, exist_ok=True)
+        
+        # Save the random concept image
+        for img in cd.random_concept_imgs:
+            shutil.copy(img, destination / img.name)
+        
+        # Create num_experiments random samples
+        self.random_samples = {}
+        
+        for i in range(self.num_random_exp):
+            random_num = f"Random_{i:03d}"
+            
+            self.random_samples[random_num] =  np.array(random.sample(list_of_files, self.min_imgs))
+        
+            destination = img.parent.parent / "Random" / random_num
+            destination.mkdir(parents=True, exist_ok=True)
+                
+            # Save the random imgs for review save_random
+            for img in cd.random_imgs:
+
+                shutil.copy(img, destination / img.name)
+    
     def load_concept_imgs(self, concept, max_imgs=1000):
-        """Loads all colored images of a concept.
+        """
+        This function loads images for the given concept from the source directory.
 
-    Args:
-      concept: The name of the concept to be loaded
-      max_imgs: maximum number of images to be loaded
+        :param concept: The name of the concept to be loaded.
+        :param max_imgs: Maximum number of images to be loaded.
+        :return: Images of the desired concept or class.
+        """
 
-    Returns:
-      Images of the desired concept or class.
-    """
+        # Define the directory to extract the concept images from.
         concept_dir = self.source_dir / concept
+
+        # Form a list of the image paths.
         img_paths = [
             os.path.join(concept_dir, d)
             for d in concept_dir.iterdir()
         ]
+
+        # Return the output from this function
         return load_images_from_files(
             img_paths,
             max_imgs=max_imgs,
             return_filenames=False,
             do_shuffle=False,
-            run_parallel=(self.num_workers > 0),
-            shape=self.resize_dims,# image.shape here
-            num_workers=self.num_workers)
+            shape=self.resize_dims,
+            run_parallel=False,
+            num_workers=0)
 
-    def create_patches(self, concept_dir, method='slic', discovery_images=None,
+    def create_patches(self, method='slic', discovery_images=None,
                        param_dict=None):
         """Creates a set of image patches using superpixel methods.
 
-    This method takes in the concept discovery images and transforms it to a
-    dataset made of the patches of those images.
+        This method takes in the concept discovery images and transforms it to a
+        dataset made of the patches of those images.
 
-    Args:
-      method: The superpixel method used for creating image patches. One of
+        :param method: The superpixel method used for creating image patches. One of
         'slic', 'watershed', 'quickshift', 'felzenszwalb'.
-      discovery_images: Images used for creating patches. If None, the images in
+        :param discovery_images: Images used for creating patches. If None, the images in
         the target class folder are used.
-
-      param_dict: Contains parameters of the superpixel method used in the form
+        :param param_dict: Contains parameters of the superpixel method used in the form
                 of {'param1':[a,b,...], 'param2':[z,y,x,...], ...}. For instance
                 {'n_segments':[15,50,80], 'compactness':[10,10,10]} for slic
                 method.
-    """
-        
-        superpixel_dir = concept_dir / "superpixels"
-        patch_dir = concept_dir / "patches"
-        
-        superpixel_dir.mkdir()
-        patch_dir.mkdir()
-            
+        """
+
+        # Specify the directory to save the superpixels and patches.
+        superpixel_dir = self.discovered_concepts_dir / "superpixels"
+        patch_dir = self.discovered_concepts_dir / "patches"
+
+        # Make these directories
+        superpixel_dir.mkdir(exist_ok=True, parents=True)
+        patch_dir.mkdir(exist_ok=True, parents=True)
+
+        # Create an empty param dict if we have not specified one.
         if param_dict is None:
             param_dict = {}
+
+        # Create empty lists for storing the superpixels, image numbers and patches.
         dataset, image_numbers, patches = [], [], []
+
+        # If we have not specified discovery images, we must load them.
         if discovery_images is None:
+
+            # Pass the target class and the number of images we want.
             raw_imgs = self.load_concept_imgs(
                 self.target_class, self.num_discovery_imgs)
+
+            # Set self.discovery_images to the returned images
             self.discovery_images = raw_imgs
+
+        # Otherwise, we can use the ones that have been supplied.
         else:
             self.discovery_images = discovery_images
-        if self.num_workers:
-            pool = multiprocessing.Pool(self.num_workers)
-            outputs = pool.map(
-                lambda img: self._return_superpixels(img, method, param_dict),
-                self.discovery_images)
-            for fn, sp_outputs in enumerate(outputs):
-                image_superpixels, image_patches = sp_outputs
-                for superpixel, patch in zip(image_superpixels, image_patches):
-                    dataset.append(superpixel)
-                    patches.append(patch)
-                    image_numbers.append(fn)
-        else:
-            
-            for fn, img in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
-                image_superpixels, image_patches = self._return_superpixels(
-                    img, method, param_dict)
-                
-                superpixels, patches = np.array(image_superpixels), np.array(image_patches)
-                
-                superpixels = (np.clip(superpixels, 0, 1) * 256).astype(np.uint8)
-                patches = (np.clip(patches, 0, 1) * 256).astype(np.uint8)
-            
-                superpixel_addresses = [superpixel_dir / f"{fn:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
-                patch_addresses = [patch_dir / f"{fn:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
-    
-                # Save this set
-                save_images(superpixel_addresses, superpixels)
-                save_images(patch_addresses, patches)
+
+        # For every image in the set.
+        for image_num, img in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
+            # Get the superpixels for this image using the given method.
+            image_superpixels, image_patches = self._return_superpixels(
+                img, method, param_dict)
+
+            # Convert both of the outputs to numpy arrays.
+            superpixels, patches = np.array(image_superpixels), np.array(image_patches)
+
+            # Convert both to int8 type.
+            superpixels = (np.clip(superpixels, 0, 1) * 256).astype(np.uint8)
+            patches = (np.clip(patches, 0, 1) * 256).astype(np.uint8)
+
+            # Generate addresses to save the superpixels and patches under.
+            superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
+            patch_addresses = [patch_dir / f"{image_num:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
+
+            # Save both the superpixels and patches to the generated addresses.
+            save_images(superpixel_addresses, superpixels)
+            save_images(patch_addresses, patches)
 
     def _return_superpixels(self, img, method='slic',
                             param_dict=None):
         """Returns all patches for one image.
 
-    Given an image, calculates superpixels for each of the parameter lists in
-    param_dict and returns a set of unique superpixels by
-    removing duplicates. If two patches have Jaccard similarity more than 0.5,
-    they are concidered duplicates.
+        Given an image, calculates superpixels for each of the parameter lists in
+        param_dict and returns a set of unique superpixels by
+        removing duplicates. If two patches have Jaccard similarity more than 0.5,
+        they are considered duplicates.
 
-    Args:
-      img: The input image
-      method: superpixel method, one of slic, watershed, quichsift, or
-        felzenszwalb
-      param_dict: Contains parameters of the superpixel method used in the form
-                of {'param1':[a,b,...], 'param2':[z,y,x,...], ...}. For instance
-                {'n_segments':[15,50,80], 'compactness':[10,10,10]} for slic
-                method.
-    Raises:
-      ValueError: if the segementation method is invaled.
-    """
+        :param img: The input image. :param method: Superpixel method, one of slic, watershed, quichsift,
+        or felzenszwalb. :param param_dict: Contains parameters of the superpixel method used in the form of {
+        'param1':[a,b,...], 'param2':[z,y,x,...], ...}. For instance {'n_segments':[15,50,80], 'compactness':[10,10,
+        10]} for slicmethod.
+        :return: The generated superpixels and patches.
+        """
+
+        # If a param dict has not been supplied, create an empty one.
         if param_dict is None:
             param_dict = {}
+
+        # If the method is slic, pull the params out, or use the default if they weren't specified.
         if method == 'slic':
-            if "n_segments" in param_dict.keys(): 
-                n_segmentss = param_dict["n_segments"]
-            else:
-                n_segmentss = [15, 50, 80]
+            
+            # Return the parameter for n_segments if it is in the dict, otherwise return the default.
+            n_segmentss = return_param(param_dict, "n_segments", [15, 50, 80])
+
             n_params = len(n_segmentss)
-            compactnesses = param_dict.pop('compactness', [20] * n_params)
-            sigmas = param_dict.pop('sigma', [1.] * n_params)
+            
+            compactnesses = return_param(param_dict, "compactness", [20] * n_params)
+            sigmas = return_param(param_dict, "sigma", [1.] * n_params)
+
+        # If the method is watershed, pull the params out or use the default.
         elif method == 'watershed':
-            markerss = param_dict.pop('marker', [15, 50, 80])
+            markerss = return_param(param_dict, "marker", [15, 50, 80])
+
             n_params = len(markerss)
-            compactnesses = param_dict.pop('compactness', [0.] * n_params)
+            
+            compactnesses = return_param(param_dict, "compactness", [0.] * n_params)
+          
+        # If the method is quickshift, pull the params out or use the default.
         elif method == 'quickshift':
-            max_dists = param_dict.pop('max_dist', [20, 15, 10])
+            max_dists = return_param(param_dict, "max_dist", [20, 15, 10])
+
             n_params = len(max_dists)
-            ratios = param_dict.pop('ratio', [1.0] * n_params)
-            kernel_sizes = param_dict.pop('kernel_size', [10] * n_params)
+            ratios = return_param(param_dict, "ratio", [1.0] * n_params)
+            kernel_sizes = return_param(param_dict, "kernel_size", [10] * n_params)
+
+        # If the method is felzenszwalb, pull the params out or use the default.
         elif method == 'felzenszwalb':
-            scales = param_dict.pop('scale', [1200, 500, 250])
+            scales = return_param(param_dict, "scale", [1200, 500, 250])
+
             n_params = len(scales)
-            sigmas = param_dict.pop('sigma', [0.8] * n_params)
-            min_sizes = param_dict.pop('min_size', [20] * n_params)
+            
+            sigmas = return_param(param_dict, "sigma", [0.8] * n_params)
+            min_sizes = return_param(param_dict, "min_size", [20] * n_params)
+
+        # Otherwise, the method provided is not supported.
         else:
+            # Raise an error.
             raise ValueError('Invalid superpixel method!')
+
+        # Create a list for storing the unique masks.
         unique_masks = []
+
+        # For every combination of parameters
         for i in range(n_params):
+
+            # List for storing these masks.
             param_masks = []
+
+            # Logic for using the correct segmentation.
             if method == 'slic':
                 segments = segmentation.slic(
                     img, n_segments=n_segmentss[i], compactness=compactnesses[i],
@@ -255,74 +314,103 @@ class ConceptDiscovery(object):
             elif method == 'felzenszwalb':
                 segments = segmentation.felzenszwalb(
                     img, scale=scales[i], sigma=sigmas[i], min_size=min_sizes[i])
+
+            # Iterate through all of the segmentation masks up until the max value.
             for s in range(segments.max()):
                 mask = (segments == s).astype(float)
+
+                # If the mask is meaningful and has values, proceed.
                 if np.mean(mask) > 0.001:
                     unique = True
+
+                    # Determine if this mask is unique.
                     for seen_mask in unique_masks:
                         jaccard = np.sum(seen_mask * mask) / np.sum((seen_mask + mask) > 0)
                         if jaccard > 0.5:
                             unique = False
                             break
+
+                    # If it is unique, add it to our list.
                     if unique:
                         param_masks.append(mask)
+
+            # Add the current masks to the total unqiue.
             unique_masks.extend(param_masks)
+
+        # Lists for storing the superpixels and patches.
         superpixels, patches = [], []
+
+        # While unique masks has values, run this loop.
         while unique_masks:
+            # Extract the superpixels and patch for the next mask in the list.
             superpixel, patch = self._extract_patch(img, unique_masks.pop())
+
+            # Add the values to the superpixel and patch list respectively.
             superpixels.append(superpixel)
             patches.append(patch)
+
+        # Return the superpixels and patches.
         return superpixels, patches
 
     def _extract_patch(self, image, mask):
         """Extracts a patch out of an image.
 
-    Args:
-      image: The original image
-      mask: The binary mask of the patch area
+        :param image: The original image.
+        :param mask: The binary mask of the patch area.
+        :return: Superpixel and patch.
+        """
 
-    Returns:
-      image_resized: The resized patch such that its boundaries touches the
-        image boundaries
-      patch: The original patch. Rest of the image is padded with average value
-    """
         mask_expanded = np.expand_dims(mask, -1)
+
         patch = (mask_expanded * image + (
                 1 - mask_expanded) * float(self.average_image_value) / 255)
         ones = np.where(mask == 1)
         h1, h2, w1, w2 = ones[0].min(), ones[0].max(), ones[1].min(), ones[1].max()
+
         image = Image.fromarray((patch[h1:h2, w1:w2] * 255).astype(np.uint8))
+
+        # Resize the image and convert it to a float.
         image_resized = np.array(image.resize(self.resize_dims, Image.BICUBIC)).astype(float) / 255
+
         return image_resized, patch
 
     def _get_activations(self, img_paths, paths=True, bs=2, channel_mean=None):
         """Returns activations of a list of imgs.
 
-    Args:
-      imgs: List/array of images to calculate the activations of
-      bs: The batch size for calculating activations. (To control computational
-        cost)
-      channel_mean: If true, the activations are averaged across channel.
+        :param img_paths: List of paths to the images to get activations for.
+        :param paths: True if the list is paths, if False the list will be assumed to contain image data.
+        :param bs: Batch size to be used.
+        :param channel_mean: Should the activations be averaged across the channels/filters. Reduces the complexity at
+        the cost of accuracy.
+        :return: A dictionary with the keys as the supplied bottleneck layers with the activations as the values.
+        """
 
-    Returns:
-      The array of activations
-    """
-    
+        # Create a list to store the output.
         output = []
-        for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs), desc="Calculating activations for superpixels"):
-            
-            # Load the images we need
+
+        # Loop through all the image paths taking the batch size each time.
+        for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
+                      desc="Calculating activations for superpixels"):
+
+            # Load the images we need if the paths are supplied.
             if paths:
+                # For every image in the batch, open the image and convert it to a numpy array.
                 imgs = [np.array(Image.open(img)) for img in img_paths[i * bs:(i + 1) * bs]]
 
+            # Otherwise we can just use the passed images.
             else:
                 imgs = img_paths
-            
-            output.append(
-                self.model.run_examples(np.array(imgs)))
 
+            # Append the returned activations from running the model.
+            output.append(
+                self.model.run_examples(np.array(imgs), channel_mean))
+
+        # Dict to store the activations.
         aggregated_out = {}
+
+        # For every layer.
         for k in output[0].keys():
+            # Take all the batch outputs for that layer and concatenate the results.
             aggregated_out[k] = np.concatenate(list(d[k] for d in output))
 
         return aggregated_out
@@ -330,141 +418,186 @@ class ConceptDiscovery(object):
     def _cluster(self, acts, method='KM', param_dict=None):
         """Runs unsupervised clustering algorithm on concept actiavtations.
 
-    Args:
-      acts: activation vectors of datapoints points in the bottleneck layer.
+        :param acts: activation vectors of datapoints points in the bottleneck layer.
         E.g. (number of clusters,) for Kmeans
-      method: clustering method. We have:
+        :param method: clustering method. We have:
         'KM': Kmeans Clustering
         'AP': Affinity Propagation
         'SC': Spectral Clustering
         'MS': Mean Shift clustering
         'DB': DBSCAN clustering method
-      param_dict: Contains superpixl method's parameters. If an empty dict is
+        :param param_dict: Contains superpixel method's parameters. If an empty dict is
                  given, default parameters are used.
+        :return:
+        asg: The cluster assignment label of each data points
+        cost: The clustering cost of each data point
+        centers: The cluster centers. For methods like Affinity Propagetion
+        where they do not return a cluster center or a clustering cost, it
+        calculates the medoid as the center  and returns distance to center as
+        each data points clustering cost.
+        """
 
-    Returns:
-      asg: The cluster assignment label of each data points
-      cost: The clustering cost of each data point
-      centers: The cluster centers. For methods like Affinity Propagetion
-      where they do not return a cluster center or a clustering cost, it
-      calculates the medoid as the center  and returns distance to center as
-      each data points clustering cost.
-
-    Raises:
-      ValueError: if the clustering method is invalid.
-    """
+        # Create an empty param dict if we don't have one.
         if param_dict is None:
             param_dict = {}
+
+        # Initialize the centres as None
         centers = None
+
         if method == 'KM':
-            n_clusters = param_dict.pop('n_clusters', 25)
+            n_clusters = return_param(param_dict, "n_clusters", 25)
+
             km = cluster.KMeans(n_clusters)
             d = km.fit(acts)
+
             centers = km.cluster_centers_
+
             d = np.linalg.norm(
                 np.expand_dims(acts, 1) - np.expand_dims(centers, 0), ord=2, axis=-1)
             asg, cost = np.argmin(d, -1), np.min(d, -1)
+
         elif method == 'AP':
-            damping = param_dict.pop('damping', 0.5)
+            damping = return_param(param_dict, "damping", 0.5)
+
             ca = cluster.AffinityPropagation(damping)
             ca.fit(acts)
+
             centers = ca.cluster_centers_
+
             d = np.linalg.norm(
                 np.expand_dims(acts, 1) - np.expand_dims(centers, 0), ord=2, axis=-1)
             asg, cost = np.argmin(d, -1), np.min(d, -1)
+
         elif method == 'MS':
-            ms = cluster.MeanShift(n_jobs=self.num_workers)
+            ms = cluster.MeanShift()
             asg = ms.fit_predict(acts)
+
         elif method == 'SC':
-            n_clusters = param_dict.pop('n_clusters', 25)
-            sc = cluster.SpectralClustering(
-                n_clusters=n_clusters, n_jobs=self.num_workers)
+            n_clusters = return_param(param_dict, "n_clusters", 25)
+
+            sc = cluster.SpectralClustering(n_clusters=n_clusters)
             asg = sc.fit_predict(acts)
+
         elif method == 'DB':
-            eps = param_dict.pop('eps', 0.5)
-            min_samples = param_dict.pop('min_samples', 20)
+            eps = return_param(param_dict, "eps", 0.5)
+            min_samples = return_param(param_dict, "min_samples", 20)
+
             sc = cluster.DBSCAN(eps, min_samples, n_jobs=self.num_workers)
             asg = sc.fit_predict(acts)
+
         else:
             raise ValueError('Invalid Clustering Method!')
-        if centers is None:  ## If clustering returned cluster centers, use medoids
+
+        # If clustering returned cluster centers, use medoids
+        if centers is None:
+
             centers = np.zeros((asg.max() + 1, acts.shape[1]))
             cost = np.zeros(len(acts))
+
             for cluster_label in range(asg.max() + 1):
                 cluster_idxs = np.where(asg == cluster_label)[0]
                 cluster_points = acts[cluster_idxs]
+
                 pw_distances = metrics.euclidean_distances(cluster_points)
+
                 centers[cluster_label] = cluster_points[np.argmin(
                     np.sum(pw_distances, -1))]
+
                 cost[cluster_idxs] = np.linalg.norm(
                     acts[cluster_idxs] - np.expand_dims(centers[cluster_label], 0),
                     ord=2,
                     axis=-1)
+
         return asg, cost, centers
-    
+
     def discovery_images_size(self, target_class, num_discovery_imgs):
+        """
+        This functionr returns the number of images in the target class for discovery.
+
+        :param target_class: The class we want to find the number of images for.
+        :param num_discovery_imgs: The max number of discovery images.
+        :return: The count of images or max size allowed, whichever is smaller.
+        """
+
+        # Find the discovery directory.
         discovery_dir = self.source_dir / target_class
-        
-        
+
+        # Get the images by iterating the directory.
         discovery_images = np.array(list(discovery_dir.iterdir()))
-    
+
+        # Return the smallest of the images in the directory or the max allowed.
         return min(len(discovery_images), num_discovery_imgs)
 
-    def discover_concepts(self, concept_dir,
-                          method='KM',
-                          activations=None,
-                          param_dicts=None):
+    def discover_concepts(self, method='KM', activations=None, param_dicts=None, bs=2):
         """Discovers the frequent occurring concepts in the target class.
 
-      Calculates self.dic, a dicationary containing all the informations of the
-      discovered concepts in the form of {'bottleneck layer name: bn_dic} where
-      bn_dic itself is in the form of {'concepts:list of concepts,
-      'concept name': concept_dic} where the concept_dic is in the form of
-      {'images': resized patches of concept, 'patches': original patches of the
-      concepts, 'image_numbers': image id of each patch}
+        Calculates self.dic, a dictionary containing all the information of the
+        discovered concepts in the form of {'bottleneck layer name: bn_dic} where
+        bn_dic itself is in the form of {'concepts:list of concepts,
+        'concept name': concept_dic} where the concept_dic is in the form of
+        {'images': resized patches of concept, 'patches': original patches of the
+        concepts, 'image_numbers': image id of each patch}
 
-    Args:
-      method: Clustering method.
-      activations: If activations are already calculated. If not calculates
+        :param method: Clustering method.
+        :param activations: If activations are already calculated. If not calculates
                    them. Must be a dictionary in the form of {'bn':array, ...}
-      param_dicts: A dictionary in the format of {'bottleneck':param_dict,...}
+        :param param_dicts: A dictionary in the format of {'bottleneck':param_dict,...}
                    where param_dict contains the clustering method's parametrs
                    in the form of {'param1':value, ...}. For instance for Kmeans
                    {'n_clusters':25}. param_dicts can also be in the format
                    of param_dict where same parameters are used for all
                    bottlenecks.
-    """
-        
+        """
+
+        # If a param dict is not specified use an empty one.
         if param_dicts is None:
             param_dicts = {}
+        # Make sure that the param dict has the bottleneck layers as keys with params for each.
         if set(param_dicts.keys()) != set(self.bottlenecks):
             param_dicts = {bn: param_dicts for bn in self.bottlenecks}
-            
-        self.dic = {}  ## The main dictionary of the ConceptDiscovery class.
-        
+
+        # The main dictionary of the ConceptDiscovery class.
+        self.dic = {}
+
+        # Get the discovery size.
         discovery_size = self.discovery_images_size(self.target_class, self.num_discovery_imgs)
-        
+
+        # If we don't have any or are missing activations, get them.
         if activations is None or set(self.bottlenecks) != set(activations.keys()):
-            
-            superpixels_dir = concept_dir / "superpixels"
+            # Get the superpixel images.
+            superpixels_dir = self.discovered_concepts_dir / "superpixels"
             superpixel_images = np.array(list(superpixels_dir.iterdir()))
-            
-            patches_dir = concept_dir / "patches"
+
+            # Get the patch images.
+            patches_dir = self.discovered_concepts_dir / "patches"
             patch_images = np.array(list(patches_dir.iterdir()))
-            
-            activations = self._get_activations(superpixel_images, bs=4)
-    
-        # Fill activations
+
+            # Get the activations back after passing the superpixels.
+            activations = self._get_activations(superpixel_images, bs=bs, channel_mean=self.channel_mean)
+
+        # For every bottleneck we will cluster.
         for bn in self.bottlenecks:
+
+            # Dictionary to store results and get the activations.
             bn_dic = {}
             bn_activations = activations[bn]
 
-            bn_dic['label'], bn_dic['cost'], centers = self._cluster(
-                bn_activations, method, param_dicts[bn])
+            # Cluster the activations
+            bn_dic['label'], bn_dic['cost'], centers = self._cluster(bn_activations, method, param_dicts[bn])
+
+            # Set the concept number and create a list under "concepts" in the bn_dic.
             concept_number, bn_dic['concepts'] = 0, []
+
+            # For every cluster label returned.
             for i in range(bn_dic['label'].max() + 1):
+
+                # Get the indexes with that label.
                 label_idxs = np.where(bn_dic['label'] == i)[0]
+
+                # If we pass the minimum number of images for a concept.
                 if len(label_idxs) > self.min_imgs:
+
+                    # Add the details for this cluster to the dic for the current bottleneck layer.
                     concept_costs = bn_dic['cost'][label_idxs]
                     concept_idxs = label_idxs[np.argsort(concept_costs)[:self.max_imgs]]
                     concept_image_numbers = set([int(p.name.split("_")[0]) for p in patch_images[label_idxs]])
@@ -490,175 +623,172 @@ class ConceptDiscovery(object):
                             'image_numbers': [str(p.name.split(".")[0]) for p in patch_images[concept_idxs]]
                         }
                         bn_dic[concept + '_center'] = centers[i]
+
+            # Remove the label and cost from the dictionary.
             bn_dic.pop('label', None)
             bn_dic.pop('cost', None)
+
+            # Save the concept details for this layer into the overall dict.
             self.dic[bn] = bn_dic
-        
+
+        # Save the concept dict so we don't need to recompute it later.
         self.save_concept_dict()
 
-
     def save_concept_dict(self):
+        """
+        This function saves the concept dictionary into a pickle file, so it can be reloaded if the processes is
+        interruprted.
+        """
+
+        # Open a .pkl file in the concept directory and save the concept dictionary to it.
         with open(self.cav_dir / 'concept_dict.pkl', 'wb') as handle:
             pickle.dump(self.dic, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    
+
     def load_concept_dict(self):
+        """
+        This function loads a saved concept dictionary for use.
+        """
+
+        # Open the concept dictionary file and save it to self.dic
         with open(self.cav_dir / 'concept_dict.pkl', 'rb') as handle:
             self.dic = pickle.load(handle)
+
+    def _calculate_cav(self, c, r, bn, act_c, act_r, ow):
+        """
+        Calculates a sinle cav for a concept and a one random counterpart.
         
+        :param c: Concept name.
+        :param r: Random concept name.
+        :param bn: The bottleneck layer name.
+        :param act_c: Activation matrix of the concept in the 'bn' layer
+        :param act_r: Random activation matrix.
+        :param ow: overwrite if CAV already exists
+        :return: The accuracy of the CAV
+        """
 
-    def _random_concept_activations(self, bottleneck, random_concept):
-        """Wrapper for computing or loading activations of random concepts.
-
-    Takes care of making, caching (if desired) and loading activations.
-
-    Args:
-      bottleneck: The bottleneck layer name
-      random_concept: Name of the random concept e.g. "random500_0"
-
-    Returns:
-      A nested dict in the form of {concept:{bottleneck:activation}}
-    """
-        rnd_acts_path = os.path.join(self.activation_dir, 'acts_{}_{}'.format(
-            random_concept, bottleneck))
-        if not tf.gfile.Exists(rnd_acts_path):
-            rnd_imgs = self.load_concept_imgs(random_concept, self.max_imgs)
-            acts = get_acts_from_images(rnd_imgs, self.model, bottleneck)
-            with tf.gfile.Open(rnd_acts_path, 'w') as f:
-                np.save(f, acts, allow_pickle=False)
-            del acts
-            del rnd_imgs
-        return np.load(rnd_acts_path).squeeze()
-
-    def _calculate_cav(self, c, r, bn, act_c, act_r, ow, directory=None):
-        """Calculates a sinle cav for a concept and a one random counterpart.
-
-    Args:
-      c: conept name
-      r: random concept name
-      bn: the layer name
-      act_c: activation matrix of the concept in the 'bn' layer
-      ow: overwrite if CAV already exists
-      directory: to save the generated CAV
-
-    Returns:
-      The accuracy of the CAV
-    """
-        if directory is None:
-            directory = self.cav_dir
-#         act_r = self._random_concept_activations(bn, r)
-
-        cav_instance = cav.load_or_train_cav([c, r], bn, directory, 
+        # Train or load CAV by passing the concept details and the activations.
+        cav_instance = cav.load_or_train_cav([c, r], bn, self.cav_dir,
                                              activations={c: {bn: act_c}, r: {bn: act_r}},
                                              overwrite=ow)
 
+        # Return the CAV accuracy.
         return cav_instance.accuracies['overall']
 
     def _concept_cavs(self, bn, concept, activations, random_activations, randoms=None, ow=True):
-        """Calculates CAVs of a concept versus all the random counterparts.
-
-    Args:
-      bn: bottleneck layer name
-      concept: the concept name
-      activations: activations of the concept in the bottleneck layer
-      randoms: None if the class random concepts are going to be used
-      ow: If true, overwrites the existing CAVs
-
-    Returns:
-      A dict of cav accuracies in the form of {'bottleneck layer':
+        """
+        Calculates CAVs of a concept versus all the random counterparts.
+        
+        :param bn: bottleneck layer name
+        :param concept: the concept name
+        :param activations: activations of the concept in the bottleneck layer
+        :param random_activations: 
+        :param randoms: None if the class random concepts are going to be used
+        :param ow: If true, overwrites the existing CAVs
+        :return: A dict of cav accuracies in the form of {'bottleneck layer':
       {'concept name':[list of accuracies], ...}, ...}
-    """
+        """
+
         if randoms is None:
             randoms = [
                 'random500_{}'.format(i) for i in np.arange(self.num_random_exp)
             ]
+
         rnd = "Random"
-        
-        if self.num_workers:
-            pool = multiprocessing.Pool(20)
-            accs = pool.map(
-                lambda rnd: self._calculate_cav(concept, rnd, bn, activations, random_activations, ow),
-                randoms)
-        else:
-#             accs = []
-#             for rnd in randoms:
-            accs = self._calculate_cav(concept, rnd, bn, activations, random_activations,  ow)
+
+        accs = self._calculate_cav(concept, rnd, bn, activations, random_activations, ow)
         return accs
 
-    def cavs(self, min_acc=0, ow=True):
-        """Calculates cavs for all discovered concepts.
+    def cavs(self, min_acc=0, ow=True, bs=2):
+        """
+        Calculates cavs for all discovered concepts.
 
-    This method calculates and saves CAVs for all the discovered concepts
-    versus all random concepts in all the bottleneck layers
+        This method calculates and saves CAVs for all the discovered concepts
+        versus all random concepts in all the bottleneck layers
+        
+        :param min_acc: Delete discovered concept if the average classification accuracy of the CAV is less than min_acc
+        :param ow: If True, overwrites an already calculated cav.
+        :param bs: The batch size for calculating the activations.
+        :return: The accuracies of all the CAVs generated.
+        """
 
-    Args:
-      min_acc: Delete discovered concept if the average classification accuracy
-        of the CAV is less than min_acc
-      ow: If True, overwrites an already calcualted cav.
-
-    Returns:
-      A dicationary of classification accuracy of linear boundaries orthogonal
-      to cav vectors
-    """
+        # Create a dictionary for the accuracies and a list to track concepts to delete.
         acc = {bn: {} for bn in self.bottlenecks}
         concepts_to_delete = []
-        
+
+        # If we don't have the concept dic, load it.
         if not hasattr(self, "dic"):
             self.load_concept_dict()
-            
-#         discovery_dir = self.source_dir / self.target_class
-#         discovery_images = np.array(list(discovery_dir.iterdir()))
-        
-#         target_class_acts_all = self._get_activations(discovery_images, bs=1)
-        
+
         # Get all images in the random concept folder
         # List of all random images in the random concept folder.
         # random_concept_imgs = iter over directory
-        rnd_acts_all = self._get_activations(self.random_imgs)
-        
+        # TODO: Introduce random activations for a range of random samples and random concepts for testing
+        rnd_acts_all = self._get_activations(self.random_imgs, bs=bs, channel_mean=self.channel_mean)
+
+        concept_acts_dict = {}
+
+        # For every bottleneck.
         for bn in self.bottlenecks:
-            
-#             target_class_acts = target_class_acts_all[bn]
-#             acc[bn][self.target_class] = self._concept_cavs(
-#                 bn, self.target_class, target_class_acts, ow=ow)
-            
+
             rnd_acts = rnd_acts_all[bn]
-#             acc[bn][self.random_concept] = self._concept_cavs(
-#                 bn, self.random_concept, rnd_acts, ow=ow)
-            
+            #             acc[bn][self.random_concept] = self._concept_cavs(
+            #                 bn, self.random_concept, rnd_acts, ow=ow)
+
+            # For every concept
             for concept in self.dic[bn]['concepts']:
-                
+
+                # Get the images for the concept.
                 concept_imgs = self.dic[bn][concept]['images']
-                concept_acts_all = self._get_activations(concept_imgs)
+
+                # If we have yet to get the activations for this concept, get them now.
+                if concept not in concept_acts_dict.keys():
+                    concept_acts_dict[concept] = self._get_activations(concept_imgs, bs=bs, channel_mean=self.channel_mean)
                 
-                concept_acts = concept_acts_all[bn]
+                # Extract the activations for the current concept in the current bottlneck layer.
+                concept_acts = concept_acts_dict[concept][bn]
+                
+                # Add the accuracy for the concept to the dictionary.
+                # TODO: Generate multiple CAVs for many random activations for statistical testing.
                 acc[bn][concept] = self._concept_cavs(bn, concept, concept_acts, rnd_acts, ow=ow)
+                
+                # If the mean of the CAV accuracies is less than the min, delete the concept.
                 if np.mean(acc[bn][concept]) < min_acc:
                     concepts_to_delete.append((bn, concept))
-            
+
+        # Delete the concept if it is not accurate enough.
         for bn, concept in concepts_to_delete:
             self.delete_concept(bn, concept)
-            
+
         return acc
 
-    def load_cav_direction(self, c, r, bn, directory=None):
-        """Loads an already computed cav.
+    def load_cav_direction(self, concept, random, bn, directory=None):
+        """
+        Loads an already computed CAV.
+        
+        :param concept: Concept name.
+        :param random: Random concept name.
+        :param bn: Bottleneck layer.
+        :param directory: Where CAV is saved.
+        
+        :return: The CAV instance.
+        """
 
-    Args:
-      c: concept name
-      r: random concept name
-      bn: bottleneck layer
-      directory: where CAV is saved
-
-    Returns:
-      The cav instance
-    """
+        # If a directory is not specified, use self.cav_dir
         if directory is None:
             directory = self.cav_dir
+
+        # Load the CAV.
+        loaded_cav = cav.load_or_train_cav([concept, random], bn, directory)
         
-        loaded_cav = cav.load_or_train_cav([c,r], bn, directory)
-    
-        vector = loaded_cav.get_cav(c)
+        if loaded_cav is None:
+            print(f"Concept: {concept}")
+            print(f"Random: {random}")
+            print(f"Bottle: {bn}")
+            print(f"directory: {directory}")
         
+        # Extract the vector from the CAV.
+        vector = loaded_cav.get_cav(concept)
+
         return vector
 
     def _sort_concepts(self, scores):
@@ -672,119 +802,125 @@ class ConceptDiscovery(object):
             self.dic[bn]['concepts'] = concepts
 
     def _return_gradients(self, images, paths=True):
-        """For the given images, calculate a dictionary of gradients for each layer.
+        """
+        For the given images, calculate a dictionary of gradients for each layer.
         The corresponding images and detection info is returned.
-
-    Args:
-      images: Images for which we want to calculate gradients.
-
-    Returns:
-      A dictionary of images gradients in all bottleneck layers.
-    """
         
+        :param images: Images for which we want to calculate gradients.
+        :param paths: Whether the supplied list contains paths, if False the list must contain images.
+        
+        :return: Dictionary of gradients and info on which image and bounding box they came from.
+        """
+
         # Initialize variables to store the gradients and info.
-        gradients = {k: [] for k in self.bottlenecks} 
+        gradients = {k: [] for k in self.bottlenecks}
         total_info = []
-        
+
         # Get the class id for the label we have.
         class_id = self.model.label_to_id(self.target_class.replace('_', ' '))
-        
-        # Loop through all of the images, one at a time.
+
+        # Loop through all the images, one at a time.
         for i in tqdm(range(len(images)), total=len(images), desc="Calculating gradients"):
-            
+
             # Load the image we need
             if paths:
                 img = [T.ToTensor()(Image.open(images[i]).resize(self.resize_dims, Image.BICUBIC))]
             else:
                 img = images[i]
-            
+
             # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
-            img_gradients, detection_info =  self.model.get_gradient(img, class_id)
-            
+            img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean)
+
             del img
-            
+
             # Add the information regarding the current info to the detection info.
             current_info = [f"{images[i].name}_{part}" for part in detection_info]
-            
-            # Add this info to the total so we can correspond them to the gradients.
+
+            # Add this info to the total, so we can correspond them to the gradients.
             total_info = total_info + current_info
-            
+
             # Iterate through the layers we have and add the corresponding gradients to our total for the layer.
             for layer, vals in img_gradients.items():
-                
                 # Add these gradients to the total we have collected so far
                 gradients[layer] = gradients[layer] + vals
 
         # Convert the lists to numpy arrays
-#         for k, v in gradients.items():
-#             gradients[k] = np.array(v)
+        #         for k, v in gradients.items():
+        #             gradients[k] = np.array(v)
 
         return gradients, total_info
 
     def _tcav_score(self, bn, concept, rnd, gradients):
-        """Calculates and returns the TCAV score of a concept.
-
-    Args:
-      bn: bottleneck layer
-      concept: concept name
-      rnd: random counterpart
-      gradients: Dict of gradients of tcav_score_images
-
-    Returns:
-      TCAV score of the concept with respect to the given random counterpart
-    """
+        """
+        Calculates and returns the TCAV score of a concept.
+        
+        :param bn: bottleneck layer.
+        :param concept: Concept name.
+        :param rnd: Random counterpart.
+        :param gradients: Dict of gradients of tcav_score_images.
+        
+        :return: TCAV score of the concept with respect to the given random counterpart
+        """
+        
+        # Get the CAV vector.
         vector = self.load_cav_direction(concept, rnd, bn)
+        
+        # Multiply the CAV vector with the gradients
         prod = np.sum(gradients[bn] * vector, -1)
+        
         return np.mean(prod < 0)
 
     def tcavs(self, test=False, sort=True, tcav_score_images=None):
-        """Calculates TCAV scores for all discovered concepts and sorts concepts.
+        """
+        Calculates TCAV scores for all discovered concepts and sorts concepts.
 
-    This method calculates TCAV scores of all the discovered concepts for
-    the target class using all the calculated cavs. It later sorts concepts
-    based on their TCAV scores.
-
-    Args:
-      test: If true, perform statistical testing and removes concepts that don't
-        pass
-      sort: If true, it will sort concepts in each bottleneck layers based on
-        average TCAV score of the concept.
-      tcav_score_images: Target class images used for calculating tcav scores.
-        If None, the target class source directory images are used.
-
-    Returns:
-      A dictionary of the form {'bottleneck layer':{'concept name':
-      [list of tcav scores], ...}, ...} containing TCAV scores.
-    """
-
-        tcav_scores = {bn: {} for bn in self.bottlenecks}
+        This method calculates TCAV scores of all the discovered concepts for
+        the target class using all the calculated CAVs. It later sorts concepts
+        based on their TCAV scores.
         
+        :param test: If true, perform statistical testing and removes concepts that don't pass
+        :param sort: If true, it will sort concepts in each bottleneck layers based on average TCAV score of the
+        concept.
+        :param tcav_score_images: Target class images used for calculating tcav scores.
+        If None, the target class source directory images are used.
+        
+        :return: A dictionary of the form {'bottleneck layer':{'concept name':
+        [list of tcav scores], ...}, ...} containing TCAV scores.
+        """
+        
+        # Initialize a dictionary to store the scores.
+        tcav_scores = {bn: {} for bn in self.bottlenecks}
+
+        # If we don't have the concept dictionary, load it in.
         if not hasattr(self, "dic"):
             self.load_concept_dict()
-        
-#         randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
-        
+
+        #         randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
+
+        # If we have not got tcav score images, load the images from the source directory.
         if tcav_score_images is None:  # Load target class images if not given
             files = self.source_dir / self.target_class
             tcav_score_images = list(files.iterdir())
-        
+
         # Accept image paths from target class folder?
-        gradients = self._return_gradients(tcav_score_images)
-        
+        gradients, _ = self._return_gradients(tcav_score_images)
+
+        # For every bottleneck and concept
         for bn in self.bottlenecks:
-            for concept in self.dic[bn]['concepts'] + [self.random_concept]:
+            
+            for concept in self.dic[bn]['concepts']: # + [self.random_concept]:
+                
                 def t_func(rnd):
                     return self._tcav_score(bn, concept, rnd, gradients)
 
-                if self.num_workers:
-                    pool = multiprocessing.Pool(self.num_workers)
-                    tcav_scores[bn][concept] = pool.map(lambda rnd: t_func(rnd), randoms)
-                else:
-                    tcav_scores[bn][concept] = self._tcav_score(bn, concept, "Random", gradients)
+                # TODO: Allow for list of tcav scores because random samples will be larger.
+                tcav_scores[bn][concept] = self._tcav_score(bn, concept, "Random", gradients)
+                
         if test:
             self.test_and_remove_concepts(tcav_scores)
         if sort:
             self._sort_concepts(tcav_scores)
+            
         return tcav_scores
 
     def do_statistical_testings(self, i_ups_concept, i_ups_random):
@@ -823,12 +959,14 @@ class ConceptDiscovery(object):
             self.delete_concept(bn, concept)
 
     def delete_concept(self, bn, concept):
-        """Removes a discovered concepts if it's not already removed.
-
-    Args:
-      bn: Bottleneck layer where the concepts is discovered.
-      concept: concept name
-    """
+        """
+        Removes a discovered concepts if it's not already removed.
+        
+        :param bn: Bottleneck layer where the concepts is discovered.
+        :param concept: Concept name.
+        :return: 
+        """
+        
         self.dic[bn].pop(concept, None)
         if concept in self.dic[bn]['concepts']:
             self.dic[bn]['concepts'].pop(self.dic[bn]['concepts'].index(concept))
@@ -884,3 +1022,26 @@ class ConceptDiscovery(object):
         if mean:
             profile = np.mean(profile, -1)
         return profile
+
+    def _random_concept_activations(self, bottleneck, random_concept):
+        """Wrapper for computing or loading activations of random concepts.
+    
+    Takes care of making, caching (if desired) and loading activations.
+    
+    Args:
+      bottleneck: The bottleneck layer name
+      random_concept: Name of the random concept e.g. "random500_0"
+    
+    Returns:
+      A nested dict in the form of {concept:{bottleneck:activation}}
+    """
+        rnd_acts_path = os.path.join(self.activation_dir, 'acts_{}_{}'.format(
+            random_concept, bottleneck))
+        if not tf.gfile.Exists(rnd_acts_path):
+            rnd_imgs = self.load_concept_imgs(random_concept, self.max_imgs)
+            acts = get_acts_from_images(rnd_imgs, self.model, bottleneck)
+            with tf.gfile.Open(rnd_acts_path, 'w') as f:
+                np.save(f, acts, allow_pickle=False)
+            del acts
+            del rnd_imgs
+        return np.load(rnd_acts_path).squeeze()
