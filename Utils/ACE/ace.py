@@ -108,29 +108,31 @@ class ConceptDiscovery(object):
         
         # Create random selection for random concept.
         random.seed(42)
-        self.random_concept_imgs = np.array(random.sample(list_of_files, self.min_imgs))
+        random_concept_imgs = np.array(random.sample(list_of_files, self.min_imgs))
         
-        # Save these images to a subfolder called Concept in Random
-        destination = img.parent.parent / "Random" / "Concept"
+        # Save these images to a subfolder called Concept in Random.
+        destination = self.discovered_concepts_dir / "Random" / "Concept"
         destination.mkdir(parents=True, exist_ok=True)
         
-        # Save the random concept image
-        for img in cd.random_concept_imgs:
+        # Save the random concept images.
+        for img in random_concept_imgs:
             shutil.copy(img, destination / img.name)
         
-        # Create num_experiments random samples
-        self.random_samples = {}
-        
+        # For every random experiment that we need a random sample for.
         for i in range(self.num_random_exp):
+            
+            # Number this sample.
             random_num = f"Random_{i:03d}"
             
-            self.random_samples[random_num] =  np.array(random.sample(list_of_files, self.min_imgs))
+            # Get the random sample.
+            random_sample_imgs =  np.array(random.sample(list_of_files, self.min_imgs))
         
-            destination = img.parent.parent / "Random" / random_num
+            # Create the directory to store the images.
+            destination = self.discovered_concepts_dir / "Random" / random_num
             destination.mkdir(parents=True, exist_ok=True)
                 
-            # Save the random imgs for review save_random
-            for img in cd.random_imgs:
+            # Save the random sample.
+            for img in random_sample_imgs:
 
                 shutil.copy(img, destination / img.name)
     
