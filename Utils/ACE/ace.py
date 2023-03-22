@@ -918,7 +918,7 @@ class ConceptDiscovery(object):
         if not hasattr(self, "dic"):
             self.load_concept_dict()
 
-        #         randoms = ['random500_{}'.format(i) for i in np.arange(self.num_random_exp)]
+        random_samples = [f"Random_{i:03d}" for i in range(self.num_random_exp)]
 
         # If we have not got tcav score images, load the images from the source directory.
         if tcav_score_images is None:  # Load target class images if not given
@@ -927,17 +927,18 @@ class ConceptDiscovery(object):
 
         # Accept image paths from target class folder?
         gradients, _ = self._return_gradients(tcav_score_images)
+        
 
         # For every bottleneck and concept
         for bn in self.bottlenecks:
             
-            for concept in self.dic[bn]['concepts']: # + [self.random_concept]:
+            for concept in self.dic[bn]['concepts'] + ["Random_concept"]:
                 
-                def t_func(rnd):
+                def test_function(rnd):
                     return self._tcav_score(bn, concept, rnd, gradients)
 
                 # TODO: Allow for list of tcav scores because random samples will be larger.
-                tcav_scores[bn][concept] = self._tcav_score(bn, concept, "Random", gradients)
+                tcav_scores[bn][concept] = [test_function(rnd) for rnd in random_samples]
                 
         if test:
             self.test_and_remove_concepts(tcav_scores)
