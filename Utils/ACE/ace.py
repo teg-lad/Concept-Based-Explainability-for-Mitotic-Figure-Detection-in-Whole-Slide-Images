@@ -111,7 +111,7 @@ class ConceptDiscovery(object):
         random_concept_imgs = np.array(random.sample(list_of_files, self.min_imgs))
         
         # Save these images to a subfolder called Concept in Random.
-        destination = self.discovered_concepts_dir / "Random" / "Concept"
+        destination = self.discovered_concepts_dir / "Random" / "Random_concept"
         destination.mkdir(parents=True, exist_ok=True)
         
         # Save the random concept images.
@@ -676,7 +676,7 @@ class ConceptDiscovery(object):
         # Return the CAV accuracy.
         return cav_instance.accuracies['overall']
 
-    def _concept_cavs(self, bn, concept, activations, random_activations, randoms=None, ow=True):
+    def _concept_cavs(self, bn, concept, random, activations, random_activations, randoms=None, ow=True):
         """
         Calculates CAVs of a concept versus all the random counterparts.
         
@@ -690,14 +690,7 @@ class ConceptDiscovery(object):
       {'concept name':[list of accuracies], ...}, ...}
         """
 
-        if randoms is None:
-            randoms = [
-                'random500_{}'.format(i) for i in np.arange(self.num_random_exp)
-            ]
-
-        rnd = "Random"
-
-        accs = self._calculate_cav(concept, rnd, bn, activations, random_activations, ow)
+        accs = self._calculate_cav(concept, random, bn, activations, random_activations, ow)
         return accs
 
     def cavs(self, min_acc=0, ow=True, bs=2):
@@ -720,21 +713,46 @@ class ConceptDiscovery(object):
         # If we don't have the concept dic, load it.
         if not hasattr(self, "dic"):
             self.load_concept_dict()
-
-        # Get all images in the random concept folder
-        # List of all random images in the random concept folder.
-        # random_concept_imgs = iter over directory
-        # TODO: Introduce random activations for a range of random samples and random concepts for testing
-        rnd_acts_all = self._get_activations(self.random_imgs, bs=bs, channel_mean=self.channel_mean)
-
+        
+        # Get the Random directory.
+        random_dir = self.discovered_concepts_dir / "Random"
+        
+        # Get the images for the random concept.
+        random_concept_imgs = np.array(list((random_dir / "Random_concept").iterdir()))
+        
+        # Get the activations for the random concept.
+        rnd_concept_acts = self._get_activations(random_concept_imgs, bs=bs, channel_mean=self.channel_mean)
+        
+        # Create a dictionary to store the random concepts
+        all_random_acts = {}
+        
+        # Get the rest of the random samples
+        for directory in random_dir.iterdir():
+            
+            # If we are at the Concept directory, skip it.
+            if directory.name == "Random_concept":
+                continue
+            
+            # Get a numpy array of the images.
+            imgs = np.array(list(directory.iterdir()))
+            
+            # Get the activations for this random sample.
+            sample_activations = self._get_activations(imgs, bs=bs, channel_mean=self.channel_mean)
+            
+            # Add the current random sample to the 
+            all_random_acts[directory.name] = sample_activations
+        
+        # Dictionary for storung concept activations for use between layers.
         concept_acts_dict = {}
-
+        
         # For every bottleneck.
         for bn in self.bottlenecks:
-
-            rnd_acts = rnd_acts_all[bn]
-            #             acc[bn][self.random_concept] = self._concept_cavs(
-            #                 bn, self.random_concept, rnd_acts, ow=ow)
+            
+            def random_helper(random, random_acts):
+                return self._concept_cavs(bn, "Random_concept", random, rnd_concept_acts[bn], random_acts[bn], ow=ow)
+            
+            # Compute the random concept accuracy.
+            acc[bn]["Random_concept"] = [random_helper(k, v) for k, v in all_random_acts.items()]
 
             # For every concept
             for concept in self.dic[bn]['concepts']:
@@ -748,10 +766,13 @@ class ConceptDiscovery(object):
                 
                 # Extract the activations for the current concept in the current bottlneck layer.
                 concept_acts = concept_acts_dict[concept][bn]
+            
+                # Define a function to accept the random concept and the random activations.
+                def concept_helper(random, random_acts):
+                    return self._concept_cavs(bn, concept, random, concept_acts, random_acts[bn], ow=ow)
                 
-                # Add the accuracy for the concept to the dictionary.
-                # TODO: Generate multiple CAVs for many random activations for statistical testing.
-                acc[bn][concept] = self._concept_cavs(bn, concept, concept_acts, rnd_acts, ow=ow)
+                # Add the list of accuracies for the concept to the dictionary.
+                acc[bn][concept] = [concept_helper(k, v) for k, v in all_random_acts.items()]
                 
                 # If the mean of the CAV accuracies is less than the min, delete the concept.
                 if np.mean(acc[bn][concept]) < min_acc:
