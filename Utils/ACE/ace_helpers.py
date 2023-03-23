@@ -85,16 +85,11 @@ class MyModel():
         default = {"tennis racket": 43}
         return default[label]
     
-    def get_gradient(self, imgs, class_id, get_mean=True, return_info=True):
+    def get_gradient(self, imgs, class_id, get_mean=True, return_info=True, test=False):
         
         tensor_imgs = torch.stack(imgs)
         
         del imgs
-
-#         if len(tensor_imgs.shape) < 4:    
-#             tensor_imgs = tensor_imgs[None, :]
-        
-#         tensor_imgs = tensor_imgs.permute(0, 3, 1, 2)
         
         tensor_imgs = tensor_imgs.to(self.device)
 
@@ -103,7 +98,7 @@ class MyModel():
         
         del tensor_imgs
         
-        gradients, info = self.model.generate_gradients(class_id)
+        gradients, info = self.model.generate_gradients(class_id, test=test)
         
         if get_mean:
             flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in gradients.items()}
@@ -113,16 +108,6 @@ class MyModel():
         output = {k: list(v.numpy()) for k, v in flattened.items()}
         
         return output, info
-        
-        
-            
-#         flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in out.items()}
-#         output = {k: list(v.numpy()) for k, v in flattened.items()}
-        
-#         if bn:
-#             return output[bn]
-#         else:  
-#             return {k: list(v.numpy()) for k, v in flattened.items()}
     
     def return_grads(self, bns):
         grads = {}
@@ -365,81 +350,6 @@ def binary_dataset(pos, neg, balanced=True):
     return x, y
 
 
-def plot_concepts(cd, bn, num=10, address=None, mode='diverse', concepts=None):
-    """Plots examples of discovered concepts.
-
-  Args:
-    cd: The concept discovery instance
-    bn: Bottleneck layer name
-    num: Number of images to print out of each concept
-    address: If not None, saves the output to the address as a .PNG image
-    mode: If 'diverse', it prints one example of each of the target class images
-      is coming from. If 'radnom', randomly samples exmples of the concept. If
-      'max', prints out the most activating examples of that concept.
-    concepts: If None, prints out examples of all discovered concepts.
-      Otherwise, it should be either a list of concepts to print out examples of
-      or just one concept's name
-
-  Raises:
-    ValueError: If the mode is invalid.
-  """
-    if concepts is None:
-        concepts = cd.dic[bn]['concepts']
-    elif not isinstance(concepts, list) and not isinstance(concepts, tuple):
-        concepts = [concepts]
-    num_concepts = len(concepts)
-    plt.rcParams['figure.figsize'] = num * 2.1, 4.3 * num_concepts
-    fig = plt.figure(figsize=(num * 2, 4 * num_concepts))
-    outer = gridspec.GridSpec(num_concepts, 1, wspace=0., hspace=0.3)
-    for n, concept in enumerate(concepts):
-        inner = gridspec.GridSpecFromSubplotSpec(
-            2, num, subplot_spec=outer[n], wspace=0, hspace=0.1)
-        concept_images = cd.dic[bn][concept]['images']
-        concept_patches = cd.dic[bn][concept]['patches']
-        concept_image_numbers = cd.dic[bn][concept]['image_numbers']
-        if mode == 'max':
-            idxs = np.arange(len(concept_images))
-        elif mode == 'random':
-            idxs = np.random.permutation(np.arange(len(concept_images)))
-        elif mode == 'diverse':
-            idxs = []
-            while True:
-                seen = set()
-                for idx in range(len(concept_images)):
-                    if concept_image_numbers[idx] not in seen and idx not in idxs:
-                        seen.add(concept_image_numbers[idx])
-                        idxs.append(idx)
-                if len(idxs) == len(concept_images):
-                    break
-        else:
-            raise ValueError('Invalid mode!')
-        idxs = idxs[:num]
-        for i, idx in enumerate(idxs):
-            ax = plt.Subplot(fig, inner[i])
-            ax.imshow(concept_images[idx])
-            ax.set_xticks([])
-            ax.set_yticks([])
-            if i == int(num / 2):
-                ax.set_title(concept)
-            ax.grid(False)
-            fig.add_subplot(ax)
-            ax = plt.Subplot(fig, inner[i + num])
-            mask = 1 - (np.mean(concept_patches[idx] == float(
-                cd.average_image_value) / 255, -1) == 1)
-            image = cd.discovery_images[concept_image_numbers[idx]]
-            ax.imshow(mark_boundaries(image, mask, color=(1, 1, 0), mode='thick'))
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.set_title(str(concept_image_numbers[idx]))
-            ax.grid(False)
-            fig.add_subplot(ax)
-    plt.suptitle(bn)
-    if address is not None:
-        with tf.gfile.Open(address + bn + '.png', 'w') as f:
-            fig.savefig(f)
-        plt.clf()
-        plt.close(fig)
-
 
 def cosine_similarity(a, b):
     """Cosine similarity of two vectors."""
@@ -516,41 +426,6 @@ def similarity(cd, num_random_exp=None, num_workers=25):
             for pair in concept_pairs:
                 similarity_dic[bn][pair].append(sim[pair])
     return similarity_dic
-
-
-def save_ace_report(cd, accs, scores, address):
-    """Saves TCAV scores.
-
-  Saves the average CAV accuracies and average TCAV scores of the concepts
-  discovered in ConceptDiscovery instance.
-
-  Args:
-    cd: The ConceptDiscovery instance.
-    accs: The cav accuracy dictionary returned by cavs method of the
-      ConceptDiscovery instance
-    scores: The tcav score dictionary returned by tcavs method of the
-      ConceptDiscovery instance
-    address: The address to save the text file in.
-  """
-    report = '\n\n\t\t\t ---CAV accuracies---'
-    for bn in cd.bottlenecks:
-        report += '\n'
-        for concept in cd.dic[bn]['concepts']:
-            report += '\n' + bn + ':' + concept + ':' + str(
-                np.mean(accs[bn][concept]))
-    with tf.gfile.Open(address, 'w') as f:
-        f.write(report)
-    report = '\n\n\t\t\t ---TCAV scores---'
-    for bn in cd.bottlenecks:
-        report += '\n'
-        for concept in cd.dic[bn]['concepts']:
-            pvalue = cd.do_statistical_testings(
-                scores[bn][concept], scores[bn][cd.random_concept])
-            report += '\n{}:{}:{},{}'.format(bn, concept,
-                                             np.mean(scores[bn][concept]), pvalue)
-    with tf.gfile.Open(address, 'w') as f:
-        f.write(report)
-
 
 def save_concepts(cd, bs=32):
     """Saves discovered concept's images or patches.

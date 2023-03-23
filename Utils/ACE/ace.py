@@ -16,8 +16,11 @@ import random
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+from matplotlib import pyplot as plt
+import matplotlib.gridspec as gridspec
 import scipy.stats as stats
 import skimage.segmentation as segmentation
+from skimage.segmentation import mark_boundaries
 import sklearn.cluster as cluster
 import sklearn.metrics.pairwise as metrics
 import torch
@@ -36,7 +39,7 @@ class ConceptDiscovery(object):
     able to transform images from pixel space into concept space.
     """
 
-    def __init__(self, model, target_class, bottlenecks, source_dir, output_dir, num_random_exp=2,
+    def __init__(self, model, target_class, source_dir, output_dir, bottlenecks, num_random_exp=2,
                  channel_mean=True, max_imgs=40, min_imgs=20, num_discovery_imgs=40, average_image_value=117,
                  resize_dims=(512, 512)):
         """
@@ -61,8 +64,9 @@ class ConceptDiscovery(object):
         self.model = model
         self.target_class = target_class
 
-        # Save the number of random experiments.
+        # Save the number of random experiments and the random concept.
         self.num_random_exp = num_random_exp
+        self.random_concept = "Random_concept"
 
         # Save the bottlenecks
         self.bottlenecks = bottlenecks
@@ -70,12 +74,12 @@ class ConceptDiscovery(object):
         # Save the directories we will need to access
         self.source_dir = Path(source_dir)
         
-        output_dir = Path(output_dir)
-        self.discovered_concepts_dir = output_dir / 'concepts/'
-        self.results_dir = output_dir / 'results/'
-        self.cav_dir = output_dir / 'cavs/'
-        self.activation_dir = output_dir / 'acts/'
-        self.results_summaries_dir = output_dir / 'results_summaries/'
+        self.output_dir = Path(output_dir)
+        self.discovered_concepts_dir = self.output_dir / 'concepts/'
+        self.results_dir = self.output_dir / 'results/'
+        self.cav_dir = self.output_dir / 'cavs/'
+        self.activation_dir = self.output_dir / 'acts/'
+        self.results_summaries_dir = self.output_dir / 'results_summaries/'
 
         # Save channel mean option.
         self.channel_mean = channel_mean
@@ -92,9 +96,7 @@ class ConceptDiscovery(object):
 
         # Save the tuple that defines the dimensions to resize images to.
         self.resize_dims = resize_dims
-
-    def run_all(self):
-        pass
+    
     
     def initialize_random_concept_and_samples(self):
         """
@@ -108,16 +110,28 @@ class ConceptDiscovery(object):
         
         # Create random selection for random concept.
         random.seed(42)
-        random_concept_imgs = np.array(random.sample(list_of_files, self.min_imgs))
+        random_concept_superpixels = np.array(random.sample(list_of_files, self.min_imgs))
         
         # Save these images to a subfolder called Concept in Random.
-        destination = self.discovered_concepts_dir / "Random" / "Random_concept"
+        destination = self.discovered_concepts_dir / "Random" / self.random_concept / "superpixels"
         destination.mkdir(parents=True, exist_ok=True)
         
         # Save the random concept images.
-        for img in random_concept_imgs:
+        for img in random_concept_superpixels:
             shutil.copy(img, destination / img.name)
         
+        # Get the corresponding patches
+        random_concept_patches = [img.parent.parent / "patches" / img.name for img in random_concept_superpixels]
+        
+                
+        # Save these images to a subfolder called Concept in Random.
+        destination = self.discovered_concepts_dir / "Random" / self.random_concept / "patches"
+        destination.mkdir(parents=True, exist_ok=True)
+        
+        # Save the random concept images.
+        for img in random_concept_patches:
+            shutil.copy(img, destination / img.name)
+            
         # For every random experiment that we need a random sample for.
         for i in range(self.num_random_exp):
             
@@ -146,7 +160,7 @@ class ConceptDiscovery(object):
         """
 
         # Define the directory to extract the concept images from.
-        concept_dir = self.source_dir / concept
+        concept_dir = self.source_dir / concept / "discovery"
 
         # Form a list of the image paths.
         img_paths = [
@@ -522,7 +536,7 @@ class ConceptDiscovery(object):
         """
 
         # Find the discovery directory.
-        discovery_dir = self.source_dir / target_class
+        discovery_dir = self.source_dir / target_class / "discovery"
 
         # Get the images by iterating the directory.
         discovery_images = np.array(list(discovery_dir.iterdir()))
@@ -718,7 +732,7 @@ class ConceptDiscovery(object):
         random_dir = self.discovered_concepts_dir / "Random"
         
         # Get the images for the random concept.
-        random_concept_imgs = np.array(list((random_dir / "Random_concept").iterdir()))
+        random_concept_imgs = np.array(list((random_dir / self.random_concept / "superpixels").iterdir()))
         
         # Get the activations for the random concept.
         rnd_concept_acts = self._get_activations(random_concept_imgs, bs=bs, channel_mean=self.channel_mean)
@@ -730,7 +744,7 @@ class ConceptDiscovery(object):
         for directory in random_dir.iterdir():
             
             # If we are at the Concept directory, skip it.
-            if directory.name == "Random_concept":
+            if directory.name == self.random_concept:
                 continue
             
             # Get a numpy array of the images.
@@ -749,10 +763,10 @@ class ConceptDiscovery(object):
         for bn in self.bottlenecks:
             
             def random_helper(random, random_acts):
-                return self._concept_cavs(bn, "Random_concept", random, rnd_concept_acts[bn], random_acts[bn], ow=ow)
+                return self._concept_cavs(bn, self.random_concept, random, rnd_concept_acts[bn], random_acts[bn], ow=ow)
             
             # Compute the random concept accuracy.
-            acc[bn]["Random_concept"] = [random_helper(k, v) for k, v in all_random_acts.items()]
+            acc[bn][self.random_concept] = [random_helper(k, v) for k, v in all_random_acts.items()]
 
             # For every concept
             for concept in self.dic[bn]['concepts']:
@@ -781,6 +795,10 @@ class ConceptDiscovery(object):
         # Delete the concept if it is not accurate enough.
         for bn, concept in concepts_to_delete:
             self.delete_concept(bn, concept)
+        
+        # Open a .pkl file in the concept directory and save the concept accuracies to it.
+        with open(self.cav_dir / 'concept_accuracies.pkl', 'wb') as handle:
+            pickle.dump(acc, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         return acc
 
@@ -824,7 +842,7 @@ class ConceptDiscovery(object):
                 concepts.append(self.dic[bn]['concepts'][idx])
             self.dic[bn]['concepts'] = concepts
 
-    def _return_gradients(self, images, paths=True):
+    def _return_gradients(self, images, paths=True, test=False):
         """
         For the given images, calculate a dictionary of gradients for each layer.
         The corresponding images and detection info is returned.
@@ -852,7 +870,7 @@ class ConceptDiscovery(object):
                 img = images[i]
 
             # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
-            img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean)
+            img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean, test=test)
 
             del img
 
@@ -922,7 +940,7 @@ class ConceptDiscovery(object):
 
         # If we have not got tcav score images, load the images from the source directory.
         if tcav_score_images is None:  # Load target class images if not given
-            files = self.source_dir / self.target_class
+            files = self.source_dir / self.target_class / "tcav"
             tcav_score_images = list(files.iterdir())
 
         # Accept image paths from target class folder?
@@ -932,7 +950,7 @@ class ConceptDiscovery(object):
         # For every bottleneck and concept
         for bn in self.bottlenecks:
             
-            for concept in self.dic[bn]['concepts'] + ["Random_concept"]:
+            for concept in self.dic[bn]['concepts'] + [self.random_concept]:
                 
                 def test_function(rnd):
                     return self._tcav_score(bn, concept, rnd, gradients)
@@ -944,21 +962,26 @@ class ConceptDiscovery(object):
             self.test_and_remove_concepts(tcav_scores)
         if sort:
             self._sort_concepts(tcav_scores)
+        
+        # Open a .pkl file in the concept directory and save the tcav scores to it.
+        with open(self.cav_dir / 'tcav_scores.pkl', 'wb') as handle:
+            pickle.dump(tcav_scores, handle, protocol=pickle.HIGHEST_PROTOCOL)
             
         return tcav_scores
 
     def do_statistical_testings(self, i_ups_concept, i_ups_random):
         """Conducts ttest to compare two set of samples.
 
-    In particular, if the means of the two samples are staistically different.
+        In particular, if the means of the two samples are staistically different.
 
-    Args:
-      i_ups_concept: samples of TCAV scores for concept vs. randoms
-      i_ups_random: samples of TCAV scores for random vs. randoms
+        Args:
+          i_ups_concept: samples of TCAV scores for concept vs. randoms
+          i_ups_random: samples of TCAV scores for random vs. randoms
 
-    Returns:
-      p value
-    """
+        Returns:
+          p value
+        """
+        
         min_len = min(len(i_ups_concept), len(i_ups_random))
         _, p = stats.ttest_rel(i_ups_concept[:min_len], i_ups_random[:min_len])
         return p
@@ -966,12 +989,13 @@ class ConceptDiscovery(object):
     def test_and_remove_concepts(self, tcav_scores):
         """Performs statistical testing for all discovered concepts.
 
-    Using TCAV socres of the discovered concepts versurs the random_counterpart
-    concept, performs statistical testing and removes concepts that do not pass
+        Using TCAV socres of the discovered concepts versurs the random_counterpart
+        concept, performs statistical testing and removes concepts that do not pass
 
-    Args:
-      tcav_scores: Calculated dicationary of tcav scores of all concepts
-    """
+        Args:
+          tcav_scores: Calculated dicationary of tcav scores of all concepts
+        """
+        
         concepts_to_delete = []
         for bn in self.bottlenecks:
             for concept in self.dic[bn]['concepts']:
@@ -998,19 +1022,19 @@ class ConceptDiscovery(object):
     def _concept_profile(self, bn, activations, concept, randoms):
         """Transforms data points from activations space to concept space.
 
-    Calculates concept profile of data points in the desired bottleneck
-    layer's activation space for one of the concepts
+        Calculates concept profile of data points in the desired bottleneck
+        layer's activation space for one of the concepts
 
-    Args:
-      bn: Bottleneck layer
-      activations: activations of the data points in the bottleneck layer
-      concept: concept name
-      randoms: random concepts
+        Args:
+          bn: Bottleneck layer
+          activations: activations of the data points in the bottleneck layer
+          concept: concept name
+          randoms: random concepts
 
-    Returns:
-      The projection of activations of all images on all CAV directions of
-        the given concept
-    """
+        Returns:
+          The projection of activations of all images on all CAV directions of
+            the given concept
+        """
 
         def t_func(rnd):
             products = self.load_cav_direction(concept, rnd, bn) * activations
@@ -1026,16 +1050,17 @@ class ConceptDiscovery(object):
     def find_profile(self, bn, images, mean=True):
         """Transforms images from pixel space to concept space.
 
-    Args:
-      bn: Bottleneck layer
-      images: Data points to be transformed
-      mean: If true, the profile of each concept would be the average inner
-        product of all that concepts' CAV vectors rather than the stacked up
-        version.
+        Args:
+          bn: Bottleneck layer
+          images: Data points to be transformed
+          mean: If true, the profile of each concept would be the average inner
+            product of all that concepts' CAV vectors rather than the stacked up
+            version.
 
-    Returns:
-      The concept profile of input images in the bn layer.
-    """
+        Returns:
+          The concept profile of input images in the bn layer.
+        """
+        
         profile = np.zeros((len(images), len(self.dic[bn]['concepts']),
                             self.num_random_exp))
         class_acts = get_acts_from_images(
@@ -1049,16 +1074,17 @@ class ConceptDiscovery(object):
 
     def _random_concept_activations(self, bottleneck, random_concept):
         """Wrapper for computing or loading activations of random concepts.
-    
-    Takes care of making, caching (if desired) and loading activations.
-    
-    Args:
-      bottleneck: The bottleneck layer name
-      random_concept: Name of the random concept e.g. "random500_0"
-    
-    Returns:
-      A nested dict in the form of {concept:{bottleneck:activation}}
-    """
+
+        Takes care of making, caching (if desired) and loading activations.
+
+        Args:
+          bottleneck: The bottleneck layer name
+          random_concept: Name of the random concept e.g. "random500_0"
+
+        Returns:
+          A nested dict in the form of {concept:{bottleneck:activation}}
+        """
+        
         rnd_acts_path = os.path.join(self.activation_dir, 'acts_{}_{}'.format(
             random_concept, bottleneck))
         if not tf.gfile.Exists(rnd_acts_path):
@@ -1069,3 +1095,160 @@ class ConceptDiscovery(object):
             del acts
             del rnd_imgs
         return np.load(rnd_acts_path).squeeze()
+
+    def save_ace_report(self, accs=None, scores=None):
+        """Saves TCAV scores.
+
+        Saves the average CAV accuracies and average TCAV scores of the concepts
+        discovered in ConceptDiscovery instance.
+
+        """
+
+        # If we don't have the concept dictionary, load it in.
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+
+        report_path = self.output_dir / "report.txt"
+
+        if accs == None or scores == None:
+            
+            # Open the concept dictionary file and save it to self.dic
+            with open(self.cav_dir / 'concept_accuracies.pkl', 'rb') as handle:
+                accs = pickle.load(handle)
+            
+            # Open the concept dictionary file and save it to self.dic
+            with open(self.cav_dir / 'tcav_scores.pkl', 'rb') as handle:
+                scores = pickle.load(handle)
+
+        report = '\n\n\t\t\t ---CAV accuracies---'
+
+
+        for bn in self.bottlenecks:
+            report += '\n'
+            for concept in self.dic[bn]['concepts'] + [self.random_concept]:
+                report += '\n' + bn + ':' + concept + ' Average accuracy: ' + str(
+                    np.mean(accs[bn][concept]))
+
+        with open(report_path, 'w') as f:
+            f.write(report)
+
+        report = '\n\n\t\t\t ---TCAV scores---'
+
+        for bn in self.bottlenecks:
+            report += '\n'
+            for concept in self.dic[bn]['concepts'] + [self.random_concept]:
+                pvalue = self.do_statistical_testings(
+                    scores[bn][concept], scores[bn][self.random_concept])
+                report += '\n{}:{}: Average Score:{} P-value:{}'.format(bn, concept,
+                                                 np.mean(scores[bn][concept]), pvalue)
+
+        with open(report_path, 'a') as f:
+            f.write(report)
+
+    def plot_concepts(self, bn, num=10, mode='diverse', concepts=None):
+        """Plots examples of discovered concepts.
+
+        Args:
+        cd: The concept discovery instance
+        bn: Bottleneck layer name
+        num: Number of images to print out of each concept
+        address: If not None, saves the output to the address as a .PNG image
+        mode: If 'diverse', it prints one example of each of the target class images
+          is coming from. If 'radnom', randomly samples exmples of the concept. If
+          'max', prints out the most activating examples of that concept.
+        concepts: If None, prints out examples of all discovered concepts.
+          Otherwise, it should be either a list of concepts to print out examples of
+          or just one concept's name
+
+        Raises:
+        ValueError: If the mode is invalid.
+        """
+        
+        # If we don't have the concept dictionary, load it in.
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+        
+        if not hasattr(self, "discovery_images"):
+
+            # Pass the target class and the number of images we want.
+            raw_imgs = self.load_concept_imgs(
+                self.target_class, self.num_discovery_imgs)
+
+            # Set self.discovery_images to the returned images
+            self.discovery_images = raw_imgs
+        
+        if concepts is None:
+            concepts = self.dic[bn]['concepts'] + [self.random_concept]
+            
+        elif not isinstance(concepts, list) and not isinstance(concepts, tuple):
+            concepts = [concepts]
+            
+        num_concepts = len(concepts)
+        plt.rcParams['figure.figsize'] = num * 2.1, 4.3 * num_concepts
+        
+        fig = plt.figure(figsize=(num * 2, 4 * num_concepts))
+        outer = gridspec.GridSpec(num_concepts, 1, wspace=0., hspace=0.3)
+        
+        for n, concept in enumerate(concepts):
+                
+            inner = gridspec.GridSpecFromSubplotSpec(
+                2, num, subplot_spec=outer[n], wspace=0, hspace=0.1)
+            
+            if concept == self.random_concept:
+                concept_images = list((self.discovered_concepts_dir / "Random" / self.random_concept / "superpixels").iterdir())
+                concept_patches = list((self.discovered_concepts_dir / "Random" / self.random_concept / "patches").iterdir())
+                concept_image_numbers = [img.name for img in concept_images]
+            else:
+                concept_images = self.dic[bn][concept]['images']
+                concept_patches = self.dic[bn][concept]['patches']
+                concept_image_numbers = self.dic[bn][concept]['image_numbers']
+                
+            if mode == 'max':
+                idxs = np.arange(len(concept_images))
+            elif mode == 'random':
+                idxs = np.random.permutation(np.arange(len(concept_images)))
+            elif mode == 'diverse':
+                idxs = []
+                while True:
+                    seen = set()
+                    for idx in range(len(concept_images)):
+                        discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
+                        if discovery_image_num not in seen and idx not in idxs:
+                            seen.add(discovery_image_num)
+                            idxs.append(idx)
+                    if len(idxs) == len(concept_images):
+                        break
+            else:
+                raise ValueError('Invalid mode!')
+            idxs = idxs[:num]
+            for i, idx in enumerate(idxs):
+                ax = plt.Subplot(fig, inner[i])
+                img = Image.open(concept_images[idx])
+                ax.imshow(img)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                if i == int(num / 2):
+                    ax.set_title(concept)
+                ax.grid(False)
+                fig.add_subplot(ax)
+                ax = plt.Subplot(fig, inner[i + num])
+                
+                concept_patch = np.array(Image.open(concept_patches[idx]))
+                
+                mask = 1 - (np.mean(concept_patch == float(
+                    self.average_image_value) / 255, -1) == 1)
+                discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
+                image = self.discovery_images[discovery_image_num]
+                ax.imshow(mark_boundaries(image, mask, color=(1, 1, 0), mode='thick'))
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_title(str(concept_image_numbers[idx]))
+                ax.grid(False)
+                fig.add_subplot(ax)
+        plt.suptitle(bn)
+        
+    
+        with open(self.output_dir / (bn + '_concepts.png'), 'wb') as f:
+            fig.savefig(f)
+        plt.clf()
+        plt.close(fig)
