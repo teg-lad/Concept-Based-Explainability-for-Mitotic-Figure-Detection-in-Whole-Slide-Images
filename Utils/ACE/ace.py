@@ -41,7 +41,8 @@ class ConceptDiscovery(object):
     """
 
     def __init__(self, model, target_class, source_dir, output_dir, bottlenecks, num_random_exp=2,
-                 channel_mean=True, min_imgs=20, average_image_value=117, resize_dims=(512, 512)):
+                 channel_mean=True, min_imgs=20, average_image_value=117, resize_dims=(512, 512),
+                 pca_n_components=None, pca_batch_size=100):
         """
 
         :param model: A trained classification model on which we run the concept discovery algorithm.
@@ -91,6 +92,11 @@ class ConceptDiscovery(object):
 
         # Save the tuple that defines the dimensions to resize images to.
         self.resize_dims = resize_dims
+        
+        # Variable for saving instances of PCA for converting activations and gradients to the new space.
+        self.pca = None
+        self.pca_n_components = pca_n_components
+        self.pca_batch_size = pca_batch_size
     
     
     def initialize_random_concept_and_samples(self):
@@ -223,15 +229,18 @@ class ConceptDiscovery(object):
         for image_num, img_path in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
             # Get the superpixels for this image using the given method.
             img = load_image_from_file(img_path, self.resize_dims)
+            
+            channel_axis = next(iter([i for i in range(len(img.shape)) if img.shape[i] == 3]))
+
             image_superpixels, image_patches = self._return_superpixels(
-                img, method, param_dict)
+                img, method, channel_axis, param_dict)
 
             # Convert both of the outputs to numpy arrays.
             superpixels, patches = np.array(image_superpixels), np.array(image_patches)
 
             # Convert both to int8 type.
-            superpixels = (np.clip(superpixels, 0, 1) * 256).astype(np.uint8)
-            patches = (np.clip(patches, 0, 1) * 256).astype(np.uint8)
+#             superpixels = (np.clip(superpixels, 0, 1) * 256).astype(np.uint8)
+#             patches = (np.clip(patches, 0, 1) * 256).astype(np.uint8)
 
             # Generate addresses to save the superpixels and patches under.
             superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
@@ -241,8 +250,7 @@ class ConceptDiscovery(object):
             save_images(superpixel_addresses, superpixels)
             save_images(patch_addresses, patches)
 
-    def _return_superpixels(self, img, method='slic',
-                            param_dict=None):
+    def _return_superpixels(self, img, method='slic', channel_axis=2, param_dict=None):
         """Returns all patches for one image.
 
         Given an image, calculates superpixels for each of the parameter lists in
@@ -315,17 +323,17 @@ class ConceptDiscovery(object):
             if method == 'slic':
                 segments = segmentation.slic(
                     img, n_segments=n_segmentss[i], compactness=compactnesses[i],
-                    sigma=sigmas[i])
+                    sigma=sigmas[i], channel_axis=channel_axis)
             elif method == 'watershed':
                 segments = segmentation.watershed(
-                    img, markers=markerss[i], compactness=compactnesses[i])
+                    img, markers=markerss[i], compactness=compactnesses[i], channel_axis=channel_axis)
             elif method == 'quickshift':
                 segments = segmentation.quickshift(
                     img, kernel_size=kernel_sizes[i], max_dist=max_dists[i],
-                    ratio=ratios[i])
+                    ratio=ratios[i], channel_axis=channel_axis)
             elif method == 'felzenszwalb':
                 segments = segmentation.felzenszwalb(
-                    img, scale=scales[i], sigma=sigmas[i], min_size=min_sizes[i])
+                    img, scale=scales[i], sigma=sigmas[i], min_size=min_sizes[i], channel_axis=channel_axis)
 
             # Iterate through all of the segmentation masks up until the max value.
             for s in range(segments.max()):
@@ -371,22 +379,25 @@ class ConceptDiscovery(object):
         :param mask: The binary mask of the patch area.
         :return: Superpixel and patch.
         """
-
-        mask_expanded = np.expand_dims(mask, -1)
-
-        patch = (mask_expanded * image + (
-                1 - mask_expanded) * float(self.average_image_value) / 255)
+        
+        ones = (mask == 1.)
+        
+        mask_expanded = ones[...,np.newaxis]
+        
+        patch = image * mask_expanded
+        
+#         patch = (mask_expanded * image).astype(np.uint8) #  + (1 - mask_expanded) * float(self.average_image_value) / 255)
         ones = np.where(mask == 1)
         h1, h2, w1, w2 = ones[0].min(), ones[0].max(), ones[1].min(), ones[1].max()
-
-        image = Image.fromarray((patch[h1:h2, w1:w2] * 255).astype(np.uint8))
+        
+        image = Image.fromarray(patch[h1:h2, w1:w2])
 
         # Resize the image and convert it to a float.
-        image_resized = np.array(image.resize(self.resize_dims, Image.BICUBIC)).astype(float) / 255
+        image_resized = np.array(image.resize(self.resize_dims, Image.BICUBIC))
 
         return image_resized, patch
 
-    def _get_activations(self, img_paths, paths=True, bs=2, channel_mean=None):
+    def _get_activations(self, img_paths, paths=True, bs=2):
         """Returns activations of a list of imgs.
 
         :param img_paths: List of paths to the images to get activations for.
@@ -399,28 +410,91 @@ class ConceptDiscovery(object):
 
         # Create a list to store the output.
         output = []
-
-        # Loop through all the image paths taking the batch size each time.
-        for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
-                      desc="Calculating activations for superpixels"):
-
-            # Load the images we need if the paths are supplied.
-            if paths:
-                # For every image in the batch, open the image and convert it to a numpy array.
-                imgs = [np.array(Image.open(img)) for img in img_paths[i * bs:(i + 1) * bs]]
-
-            # Otherwise we can just use the passed images.
-            else:
-                imgs = img_paths
-
-            # Append the returned activations from running the model.
-            activations = self.model.run_examples(np.array(imgs), channel_mean)
+        acts_processed = 0
+        
+        if not self.channel_mean and self.pca == None:
+            self.pca = {}
             
-            if not channel_mean:
-                IncrementalPCA
+            for bn in self.bottlenecks:
+                self.pca[bn] = IncrementalPCA(batch_size=self.pca_batch_size, n_components=self.pca_batch_size)
             
-            output.append(
-                self.model.run_examples(np.array(imgs), channel_mean))
+            activations_to_be_saved = []
+            
+            activations_path = self.output_dir / "acts/"
+            saved = []
+            
+            # Loop through all the image paths taking the batch size each time.
+            for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
+                          desc="Calculating activations for PCA"):
+
+                # Load the images we need if the paths are supplied.
+                if paths:
+                    # For every image in the batch, open the image and convert it to a numpy array.
+                    imgs = [np.array(Image.open(img)) for img in img_paths[i * bs:(i + 1) * bs]]
+
+                # Otherwise we can just use the passed images.
+                else:
+                    imgs = img_paths
+
+                # Append the returned activations from running the model.
+                activations = self.model.run_examples(np.array(imgs), self.channel_mean)
+                
+                activations_to_be_saved.append(activations)
+                
+                acts_processed += bs
+                
+                if acts_processed % self.pca_batch_size == 0 or acts_processed == len(img_paths):
+                    # Dict to store the activations.
+                    aggregated_out = {}
+
+                    # For every layer.
+                    for k in activations_to_be_saved[0].keys():
+                        # Take all the batch outputs for that layer and concatenate the results.
+                        aggregated_out[k] = np.concatenate(list(d[k] for d in activations_to_be_saved))
+                    
+                    save_path = activations_path / f"{len(saved)}.pkl"
+                    saved.append(save_path)
+                    
+                    with open(save_path, 'wb') as handle:
+                        pickle.dump(aggregated_out, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                    
+                    activations_to_be_saved = []
+
+                    for bn in self.bottlenecks:
+                        self.pca[bn].partial_fit(aggregated_out[bn])
+            
+            for act_path in saved:
+                # Open the concept dictionary file and save it to self.dic
+                with open(act_path, 'rb') as handle:
+                    activations = pickle.load(handle)
+                
+                for bn in self.bottlenecks:
+                    activations[bn] = self.pca[bn].transform(activations[bn])
+            
+                output.append(activations)
+                    
+        else:
+            # Loop through all the image paths taking the batch size each time.
+            for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
+                          desc="Calculating activations for superpixels"):
+
+                # Load the images we need if the paths are supplied.
+                if paths:
+                    # For every image in the batch, open the image and convert it to a numpy array.
+                    imgs = [np.array(Image.open(img)) for img in img_paths[i * bs:(i + 1) * bs]]
+
+                # Otherwise we can just use the passed images.
+                else:
+                    imgs = img_paths
+
+                activations = self.model.run_examples(np.array(imgs), self.channel_mean)
+
+                if not self.channel_mean:
+                    for bn in self.bottlenecks:
+                        activations[bn] = self.pca[bn].transform(activations[bn])
+
+                output.append(activations)
+
 
         # Dict to store the activations.
         aggregated_out = {}
@@ -590,7 +664,7 @@ class ConceptDiscovery(object):
             patch_images = np.array(list(patches_dir.iterdir()))
 
             # Get the activations back after passing the superpixels.
-            activations = self._get_activations(superpixel_images, bs=bs, channel_mean=self.channel_mean)
+            activations = self._get_activations(superpixel_images, bs=bs)
 
         # For every bottleneck we will cluster.
         for bn in self.bottlenecks:
@@ -736,7 +810,7 @@ class ConceptDiscovery(object):
         random_concept_imgs = np.array(list((random_dir / self.random_concept / "superpixels").iterdir()))
         
         # Get the activations for the random concept.
-        rnd_concept_acts = self._get_activations(random_concept_imgs, bs=bs, channel_mean=self.channel_mean)
+        rnd_concept_acts = self._get_activations(random_concept_imgs)
         
         # Create a dictionary to store the random concepts
         all_random_acts = {}
@@ -752,7 +826,7 @@ class ConceptDiscovery(object):
             imgs = np.array(list(directory.iterdir()))
             
             # Get the activations for this random sample.
-            sample_activations = self._get_activations(imgs, bs=bs, channel_mean=self.channel_mean)
+            sample_activations = self._get_activations(imgs, bs=bs)
             
             # Add the current random sample to the 
             all_random_acts[directory.name] = sample_activations
@@ -777,7 +851,7 @@ class ConceptDiscovery(object):
 
                 # If we have yet to get the activations for this concept, get them now.
                 if concept not in concept_acts_dict.keys():
-                    concept_acts_dict[concept] = self._get_activations(concept_imgs, bs=bs, channel_mean=self.channel_mean)
+                    concept_acts_dict[concept] = self._get_activations(concept_imgs, bs=bs)
                 
                 # Extract the activations for the current concept in the current bottlneck layer.
                 concept_acts = concept_acts_dict[concept][bn]
@@ -883,12 +957,19 @@ class ConceptDiscovery(object):
 
             # Iterate through the layers we have and add the corresponding gradients to our total for the layer.
             for layer, vals in img_gradients.items():
+                
+                #
+                if self.channel_mean:
+                    final_vals = self.pca[layer].transform(vals)
+                else:
+                    final_vals = vals
+                
                 # Add these gradients to the total we have collected so far
-                gradients[layer] = gradients[layer] + vals
+                gradients[layer].append(final_vals)
 
-        # Convert the lists to numpy arrays
-        #         for k, v in gradients.items():
-        #             gradients[k] = np.array(v)
+#         #Convert the lists to numpy arrays
+#         for k, v in gradients.items():
+#             gradients[k] = np.vstack(v)
 
         return gradients, total_info
 

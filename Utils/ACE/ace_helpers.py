@@ -107,7 +107,7 @@ class MyModel():
         else:
             flattened = {k: torch.flatten(v.detach().cpu(), start_dim=1) for k, v in gradients.items()}
             
-        output = {k: list(v.numpy()) for k, v in flattened.items()}
+        output = {k: v.numpy() for k, v in flattened.items()}
         
         return output, info
     
@@ -125,7 +125,7 @@ class MyModel():
 
         return grads
 
-def create_directories(output_path, remove_old=True):
+def create_directories(output_path, remove_old=False):
     # Create an output directory for our data
     output = Path(output_path)
 
@@ -168,17 +168,17 @@ def load_image_from_file(filename, shape):
         print('Cannot find file: {}'.format(filename))
         return None
     try:
-        img = np.array(Image.open(filename).resize(
-            shape, Image.BILINEAR))
+        img = np.array(Image.open(filename).resize(shape, Image.BILINEAR))
         # Normalize pixel values to between 0 and 1.
-        img = np.float32(img) / 255.0
-        if not (len(img.shape) == 3 and img.shape[2] == 3):
-            return None
-        else:
-            return img
+#         img = np.float32(img) / 255.0
+#         print(img.shape)
+#         if not (len(img.shape) == 3 and img.shape[2] == 3):
+#             return None
+#         else:
+#             return img
 
     except Exception as e:
-        tf.logging.info(e)
+        print(e)
         return None
     return img
 
