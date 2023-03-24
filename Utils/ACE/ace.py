@@ -21,13 +21,14 @@ import matplotlib.gridspec as gridspec
 import scipy.stats as stats
 import skimage.segmentation as segmentation
 from skimage.segmentation import mark_boundaries
+from sklearn.decomposition import IncrementalPCA
 import sklearn.cluster as cluster
 import sklearn.metrics.pairwise as metrics
 import torch
 import torchvision.transforms as T
 
 from Utils.ACE.ace_helpers import *
-from Utils.TCAV import cav, tcav
+from Utils.TCAV import cav
 
 
 class ConceptDiscovery(object):
@@ -40,8 +41,7 @@ class ConceptDiscovery(object):
     """
 
     def __init__(self, model, target_class, source_dir, output_dir, bottlenecks, num_random_exp=2,
-                 channel_mean=True, max_imgs=40, min_imgs=20, num_discovery_imgs=40, average_image_value=117,
-                 resize_dims=(512, 512)):
+                 channel_mean=True, min_imgs=20, average_image_value=117, resize_dims=(512, 512)):
         """
 
         :param model: A trained classification model on which we run the concept discovery algorithm.
@@ -53,9 +53,7 @@ class ConceptDiscovery(object):
         concept (to make statistical testing possible).
         :param channel_mean: If true, for the unsupervised concept discovery the bottleneck activations are averaged
         over channels instead of using the whole acivation vector (reducing dimensionality).
-        :param max_imgs: Maximum number of images in a discovered concept.
         :param min_imgs: Minimum number of images in a discovered concept for the concept to be accepted.
-        :param num_discovery_imgs: Number of images used for concept discovery. If None, will use max_imgs instead.
         :param average_image_value: The average value used for mean subtraction in the network's preprocessing stage.
         :param resize_dims: A tuple defining the height and weight to resize images to.
         """
@@ -85,11 +83,8 @@ class ConceptDiscovery(object):
         self.channel_mean = channel_mean
 
         # Save image details
-        self.max_imgs = max_imgs
+        #self.max_imgs = max_imgs
         self.min_imgs = min_imgs
-        if num_discovery_imgs is None:
-            num_discovery_imgs = max_imgs
-        self.num_discovery_imgs = num_discovery_imgs
 
         # Save the average image value.
         self.average_image_value = average_image_value
@@ -150,33 +145,33 @@ class ConceptDiscovery(object):
 
                 shutil.copy(img, destination / img.name)
     
-    def load_concept_imgs(self, concept, max_imgs=1000):
-        """
-        This function loads images for the given concept from the source directory.
+#     def load_concept_imgs(self, concept, max_imgs=1000):
+#         """
+#         This function loads images for the given concept from the source directory.
 
-        :param concept: The name of the concept to be loaded.
-        :param max_imgs: Maximum number of images to be loaded.
-        :return: Images of the desired concept or class.
-        """
+#         :param concept: The name of the concept to be loaded.
+#         :param max_imgs: Maximum number of images to be loaded.
+#         :return: Images of the desired concept or class.
+#         """
 
-        # Define the directory to extract the concept images from.
-        concept_dir = self.source_dir / concept / "discovery"
+#         # Define the directory to extract the concept images from.
+#         concept_dir = self.source_dir / concept / "discovery"
 
-        # Form a list of the image paths.
-        img_paths = [
-            os.path.join(concept_dir, d)
-            for d in concept_dir.iterdir()
-        ]
+#         # Form a list of the image paths.
+#         img_paths = [
+#             os.path.join(concept_dir, d)
+#             for d in concept_dir.iterdir()
+#         ]
 
-        # Return the output from this function
-        return load_images_from_files(
-            img_paths,
-            max_imgs=max_imgs,
-            return_filenames=False,
-            do_shuffle=False,
-            shape=self.resize_dims,
-            run_parallel=False,
-            num_workers=0)
+#         # Return the output from this function
+#         return load_images_from_files(
+#             img_paths,
+#             max_imgs=max_imgs,
+#             return_filenames=False,
+#             do_shuffle=False,
+#             shape=self.resize_dims,
+#             run_parallel=False,
+#             num_workers=0)
 
     def create_patches(self, method='slic', discovery_images=None,
                        param_dict=None):
@@ -213,20 +208,21 @@ class ConceptDiscovery(object):
         # If we have not specified discovery images, we must load them.
         if discovery_images is None:
 
-            # Pass the target class and the number of images we want.
-            raw_imgs = self.load_concept_imgs(
-                self.target_class, self.num_discovery_imgs)
-
-            # Set self.discovery_images to the returned images
-            self.discovery_images = raw_imgs
+            # Get the list of discovery image paths.
+            concept_dir = self.source_dir / self.target_class / "discovery"
+            
+            # Save the list of discovery images paths
+            self.discovery_images = list(concept_dir.iterdir())
+            
 
         # Otherwise, we can use the ones that have been supplied.
         else:
             self.discovery_images = discovery_images
 
         # For every image in the set.
-        for image_num, img in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
+        for image_num, img_path in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
             # Get the superpixels for this image using the given method.
+            img = load_image_from_file(img_path, self.resize_dims)
             image_superpixels, image_patches = self._return_superpixels(
                 img, method, param_dict)
 
@@ -418,6 +414,11 @@ class ConceptDiscovery(object):
                 imgs = img_paths
 
             # Append the returned activations from running the model.
+            activations = self.model.run_examples(np.array(imgs), channel_mean)
+            
+            if not channel_mean:
+                IncrementalPCA
+            
             output.append(
                 self.model.run_examples(np.array(imgs), channel_mean))
 
@@ -526,7 +527,7 @@ class ConceptDiscovery(object):
 
         return asg, cost, centers
 
-    def discovery_images_size(self, target_class, num_discovery_imgs):
+    def discovery_images_size(self, target_class):
         """
         This functionr returns the number of images in the target class for discovery.
 
@@ -542,7 +543,7 @@ class ConceptDiscovery(object):
         discovery_images = np.array(list(discovery_dir.iterdir()))
 
         # Return the smallest of the images in the directory or the max allowed.
-        return min(len(discovery_images), num_discovery_imgs)
+        return len(discovery_images)
 
     def discover_concepts(self, method='KM', activations=None, param_dicts=None, bs=2):
         """Discovers the frequent occurring concepts in the target class.
@@ -576,7 +577,7 @@ class ConceptDiscovery(object):
         self.dic = {}
 
         # Get the discovery size.
-        discovery_size = self.discovery_images_size(self.target_class, self.num_discovery_imgs)
+        discovery_size = self.discovery_images_size(self.target_class)
 
         # If we don't have any or are missing activations, get them.
         if activations is None or set(self.bottlenecks) != set(activations.keys()):
@@ -615,7 +616,7 @@ class ConceptDiscovery(object):
 
                     # Add the details for this cluster to the dic for the current bottleneck layer.
                     concept_costs = bn_dic['cost'][label_idxs]
-                    concept_idxs = label_idxs[np.argsort(concept_costs)[:self.max_imgs]]
+                    concept_idxs = label_idxs[np.argsort(concept_costs)]
                     concept_image_numbers = set([int(p.name.split("_")[0]) for p in patch_images[label_idxs]])
                     highly_common_concept = len(
                         concept_image_numbers) > 0.5 * len(label_idxs)
@@ -1072,30 +1073,6 @@ class ConceptDiscovery(object):
             profile = np.mean(profile, -1)
         return profile
 
-    def _random_concept_activations(self, bottleneck, random_concept):
-        """Wrapper for computing or loading activations of random concepts.
-
-        Takes care of making, caching (if desired) and loading activations.
-
-        Args:
-          bottleneck: The bottleneck layer name
-          random_concept: Name of the random concept e.g. "random500_0"
-
-        Returns:
-          A nested dict in the form of {concept:{bottleneck:activation}}
-        """
-        
-        rnd_acts_path = os.path.join(self.activation_dir, 'acts_{}_{}'.format(
-            random_concept, bottleneck))
-        if not tf.gfile.Exists(rnd_acts_path):
-            rnd_imgs = self.load_concept_imgs(random_concept, self.max_imgs)
-            acts = get_acts_from_images(rnd_imgs, self.model, bottleneck)
-            with tf.gfile.Open(rnd_acts_path, 'w') as f:
-                np.save(f, acts, allow_pickle=False)
-            del acts
-            del rnd_imgs
-        return np.load(rnd_acts_path).squeeze()
-
     def save_ace_report(self, accs=None, scores=None):
         """Saves TCAV scores.
 
@@ -1170,12 +1147,11 @@ class ConceptDiscovery(object):
         
         if not hasattr(self, "discovery_images"):
 
-            # Pass the target class and the number of images we want.
-            raw_imgs = self.load_concept_imgs(
-                self.target_class, self.num_discovery_imgs)
-
-            # Set self.discovery_images to the returned images
-            self.discovery_images = raw_imgs
+            # Get the list of discovery image paths.
+            concept_dir = self.source_dir / self.target_class / "discovery"
+            
+            # Save the list of discovery images paths
+            self.discovery_images = list(concept_dir.iterdir())
         
         if concepts is None:
             concepts = self.dic[bn]['concepts'] + [self.random_concept]
@@ -1238,7 +1214,7 @@ class ConceptDiscovery(object):
                 mask = 1 - (np.mean(concept_patch == float(
                     self.average_image_value) / 255, -1) == 1)
                 discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
-                image = self.discovery_images[discovery_image_num]
+                image = load_image_from_file(self.discovery_images[discovery_image_num], self.resize_dims)
                 ax.imshow(mark_boundaries(image, mask, color=(1, 1, 0), mode='thick'))
                 ax.set_xticks([])
                 ax.set_yticks([])

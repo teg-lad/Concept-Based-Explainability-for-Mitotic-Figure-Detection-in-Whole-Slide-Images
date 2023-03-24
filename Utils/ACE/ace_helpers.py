@@ -82,7 +82,9 @@ class MyModel():
         return {k: list(v.numpy()) for k, v in flattened.items()}
     
     def label_to_id(self, label):
-        default = {"tennis racket": 43}
+        default = {"tennis racket": 43,
+                   "mitotic figure": 1}
+        
         return default[label]
     
     def get_gradient(self, imgs, class_id, get_mean=True, return_info=True, test=False):
@@ -181,51 +183,51 @@ def load_image_from_file(filename, shape):
     return img
 
 
-def load_images_from_files(filenames, max_imgs=500, return_filenames=False,
-                           do_shuffle=True, run_parallel=True,
-                           shape=(299, 299),
-                           num_workers=100):
-    """Return image arrays from filenames.
-  Args:
-    filenames: locations of image files.
-    max_imgs: maximum number of images from filenames.
-    return_filenames: return the succeeded filenames or not
-    do_shuffle: before getting max_imgs files, shuffle the names or not
-    run_parallel: get images in parallel or not
-    shape: desired shape of the image
-    num_workers: number of workers in parallelization.
-  Returns:
-    image arrays and succeeded filenames if return_filenames=True.
-  """
-    imgs = []
-    # First shuffle a copy of the filenames.
-    filenames = filenames[:]
-    if do_shuffle:
-        np.random.shuffle(filenames)
-    if return_filenames:
-        final_filenames = []
-    if run_parallel:
-        pool = multiprocessing.Pool(num_workers)
-        imgs = pool.map(lambda filename: load_image_from_file(filename, shape),
-                        filenames[:max_imgs])
-        if return_filenames:
-            final_filenames = [f for i, f in enumerate(filenames[:max_imgs])
-                               if imgs[i] is not None]
-        imgs = [img for img in imgs if img is not None]
-    else:
-        for filename in filenames:
-            img = load_image_from_file(filename, shape)
-            if img is not None:
-                imgs.append(img)
-                if return_filenames:
-                    final_filenames.append(filename)
-            if len(imgs) >= max_imgs:
-                break
+# def load_images_from_files(filenames, max_imgs=500, return_filenames=False,
+#                            do_shuffle=True, run_parallel=True,
+#                            shape=(299, 299),
+#                            num_workers=100):
+#     """Return image arrays from filenames.
+#   Args:
+#     filenames: locations of image files.
+#     max_imgs: maximum number of images from filenames.
+#     return_filenames: return the succeeded filenames or not
+#     do_shuffle: before getting max_imgs files, shuffle the names or not
+#     run_parallel: get images in parallel or not
+#     shape: desired shape of the image
+#     num_workers: number of workers in parallelization.
+#   Returns:
+#     image arrays and succeeded filenames if return_filenames=True.
+#   """
+#     imgs = []
+#     # First shuffle a copy of the filenames.
+#     filenames = filenames[:]
+#     if do_shuffle:
+#         np.random.shuffle(filenames)
+#     if return_filenames:
+#         final_filenames = []
+#     if run_parallel:
+#         pool = multiprocessing.Pool(num_workers)
+#         imgs = pool.map(lambda filename: load_image_from_file(filename, shape),
+#                         filenames[:max_imgs])
+#         if return_filenames:
+#             final_filenames = [f for i, f in enumerate(filenames[:max_imgs])
+#                                if imgs[i] is not None]
+#         imgs = [img for img in imgs if img is not None]
+#     else:
+#         for filename in filenames:
+#             img = load_image_from_file(filename, shape)
+#             if img is not None:
+#                 imgs.append(img)
+#                 if return_filenames:
+#                     final_filenames.append(filename)
+#             if len(imgs) >= max_imgs:
+#                 break
 
-    if return_filenames:
-        return np.array(imgs), final_filenames
-    else:
-        return np.array(imgs)
+#     if return_filenames:
+#         return np.array(imgs), final_filenames
+#     else:
+#         return np.array(imgs)
 
 
 def get_acts_from_images(imgs, model, bottleneck_name):
@@ -430,13 +432,17 @@ def similarity(cd, num_random_exp=None, num_workers=25):
 def save_concepts(cd, bs=32):
     """Saves discovered concept's images or patches.
 
-  Args:
+    Args:
     cd: The ConceptDiscovery instance the concepts of which we want to save
-  """
+    """
+    
     for bn in cd.bottlenecks:
         for concept in cd.dic[bn]['concepts']:
             patches_dir = Path(cd.discovered_concepts_dir, bn, concept + '_patches')
             images_dir = Path(cd.discovered_concepts_dir, bn, concept)
+            
+            Path(patches_dir).mkdir(parents=True, exist_ok=True)
+            Path(images_dir).mkdir(parents=True, exist_ok=True)
             
             for i in range(int(len(cd.dic[bn][concept]['patches']) / bs) + 1):
             
@@ -446,9 +452,6 @@ def save_concepts(cd, bs=32):
                 superpixels = np.array([np.array(Image.open(img)) for img in cd.dic[bn][concept]['images'][i * bs:(i + 1) * bs]])
                 # superpixels = (np.clip(loaded_superpixels, 0, 1) * 256).astype(np.uint8)
 
-                Path(patches_dir).mkdir(parents=True, exist_ok=True)
-                Path(images_dir).mkdir(parents=True, exist_ok=True)
-
                 image_numbers = cd.dic[bn][concept]['image_numbers'][i * bs:(i + 1) * bs]
                 image_addresses = [images_dir / f"{img_num}.png" for img_num in image_numbers]
                 patch_addresses = [patches_dir / f"{img_num}.png" for img_num in image_numbers]
@@ -456,7 +459,35 @@ def save_concepts(cd, bs=32):
                 save_images(patch_addresses, patches)
                 save_images(image_addresses, superpixels)
 
+def save_discovery_images(cd, bs=32):
+    """
+    Save the discovery images
+    
+    Args:
+    cd: The ConceptDiscovery instance the concepts of which we want to save 
+    """
+    
+    if cd.discovery_images == None:
+        # Get the list of discovery image paths.
+        concept_dir = cd.source_dir / cd.target_class / "discovery"
 
+        # Save the list of discovery images paths
+        self.discovery_images = list(concept_dir.iterdir())
+    
+    
+    image_dir = cd.discovered_concepts_dir / 'images'
+    image_dir.mkdir(parents=True, exist_ok=True)
+    
+    for i in range(int(len(cd.discovery_images) / bs) + 1):
+        
+        current_batch = cd.discovery_images[i * bs:(i + 1) * bs]
+        images = np.array([load_image_from_file(img, cd.resize_dims) for img in current_batch])
+        converted_images = (images * 256).astype(np.uint8)
+        
+        image_addresses = [image_dir / f"{img.name}.png" for img in current_batch]
+
+        save_images(image_addresses, converted_images)
+            
 def save_images(addresses, images):
     """Save images in the addresses.
 
