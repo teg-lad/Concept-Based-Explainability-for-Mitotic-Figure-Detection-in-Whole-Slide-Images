@@ -42,7 +42,7 @@ class ConceptDiscovery(object):
 
     def __init__(self, model, target_class, source_dir, output_dir, bottlenecks, num_random_exp=2,
                  channel_mean=True, min_imgs=20, average_image_value=117, resize_dims=(512, 512),
-                 pca_n_components=None, pca_batch_size=100):
+                 pca_n_components=2500):
         """
 
         :param model: A trained classification model on which we run the concept discovery algorithm.
@@ -96,7 +96,6 @@ class ConceptDiscovery(object):
         # Variable for saving instances of PCA for converting activations and gradients to the new space.
         self.pca = None
         self.pca_n_components = pca_n_components
-        self.pca_batch_size = pca_batch_size
     
     
     def initialize_random_concept_and_samples(self):
@@ -413,19 +412,21 @@ class ConceptDiscovery(object):
         acts_processed = 0
         
         if not self.channel_mean and self.pca == None:
+            
+            print("The activations are being calculated and then PCA will be computed on the activations to lower the dimensionality. This will take some time.")
+            
             self.pca = {}
             
             for bn in self.bottlenecks:
-                self.pca[bn] = IncrementalPCA(batch_size=self.pca_batch_size, n_components=self.pca_batch_size)
+                self.pca[bn] = IncrementalPCA(n_components=self.pca_n_components)
             
-            activations_to_be_saved = []
-            
-            activations_path = self.output_dir / "acts/"
-            saved = []
+            activations_path = self.output_dir / "acts/superpixels"
             
             # Loop through all the image paths taking the batch size each time.
             for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
                           desc="Calculating activations for PCA"):
+                
+                batch_path = activations_path / f"{i}_acts.pkl"
 
                 # Load the images we need if the paths are supplied.
                 if paths:
@@ -439,38 +440,67 @@ class ConceptDiscovery(object):
                 # Append the returned activations from running the model.
                 activations = self.model.run_examples(np.array(imgs), self.channel_mean)
                 
-                activations_to_be_saved.append(activations)
+                with open(batch_path, 'wb') as handle:
+                        pickle.dump(aggregated_out, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
+            # Find the number of batches in each to allow for n_components
+            
+            # Use divmod to find the number of complete batches, then split the remainder across the batches.
+            num_batches, remainder = divmod(img_paths.shape[0], self.pca_n_components)
+            
+            # Use the floor rounding so we make sure the last batch always has enough. If we round up and take too much in the
+            # first batches we may be left short
+            activation_dicts_per_batches = (self.pca_n_components / bs) + math.floor(remainder / bs / num_batches)
+            
+            pca_batches_complete = 0
+            current_pca_batch = []
+            for batch in activations_path.iterdir():
                 
-                acts_processed += bs
+                # Open the activation file and read it in.
+                with open(batch, 'rb') as handle:
+                    activations = pickle.load(handle)
+                    
+                current_pca_batch.append()
                 
-                if acts_processed % self.pca_batch_size == 0 or acts_processed == len(img_paths):
-                    # Dict to store the activations.
-                    aggregated_out = {}
+                if pca_batches_complete < num_batches and len(current_pca_batch) == activation_dicts_per_batches:
+                    
+                    pca_batches_complete += 1
+                    
+                    aggregated_acts = {}
 
                     # For every layer.
-                    for k in activations_to_be_saved[0].keys():
+                    for k in current_pca_batch[0].keys():
                         # Take all the batch outputs for that layer and concatenate the results.
-                        aggregated_out[k] = np.concatenate(list(d[k] for d in activations_to_be_saved))
-                    
-                    save_path = activations_path / f"{len(saved)}.pkl"
-                    saved.append(save_path)
-                    
-                    with open(save_path, 'wb') as handle:
-                        pickle.dump(aggregated_out, handle, protocol=pickle.HIGHEST_PROTOCOL)
-                    
-                    activations_to_be_saved = []
+                        aggregated_acts[k] = np.concatenate(list(d[k] for d in current_pca_batch))
 
+                    # Run partial PCA
                     for bn in self.bottlenecks:
                         self.pca[bn].partial_fit(aggregated_out[bn])
             
-            for act_path in saved:
-                # Open the concept dictionary file and save it to self.dic
+            # Run the final batch through
+            aggregated_acts = {}
+
+            # For every layer.
+            for k in current_pca_batch[0].keys():
+                # Take all the batch outputs for that layer and concatenate the results.
+                aggregated_acts[k] = np.concatenate(list(d[k] for d in current_pca_batch))
+
+            # Run partial PCA
+            for bn in self.bottlenecks:
+                self.pca[bn].partial_fit(aggregated_out[bn])
+            
+            # Read in each activation file
+            for act_path in activations_path.iterdir():
+                
+                # Open the activation file and read it in.
                 with open(act_path, 'rb') as handle:
                     activations = pickle.load(handle)
                 
+                # Convert the values in each dimension
                 for bn in self.bottlenecks:
                     activations[bn] = self.pca[bn].transform(activations[bn])
             
+                # Save the activation output.
                 output.append(activations)
                     
         else:
