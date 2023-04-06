@@ -214,6 +214,17 @@ class ConceptDiscovery(object):
         # Specify the directory to save the superpixels and patches.
         superpixel_dir = self.discovered_concepts_dir / "superpixels"
         patch_dir = self.discovered_concepts_dir / "patches"
+        
+        max_segments = None
+        
+        if superpixel_dir.exists():
+            
+            if not discovery_images:
+                return
+            else:
+                # Get the largest number of segments we have got for a discovery image so far.
+                max_segments = max([int(file.name.split("_")[1][:3]) for file in superpixel_dir.iterdir()])
+            
 
         # Make these directories
         superpixel_dir.mkdir(exist_ok=True, parents=True)
@@ -256,10 +267,15 @@ class ConceptDiscovery(object):
             # Convert both to int8 type.
 #             superpixels = (np.clip(superpixels, 0, 1) * 256).astype(np.uint8)
 #             patches = (np.clip(patches, 0, 1) * 256).astype(np.uint8)
-
+            
+    
+            if max_segments:
+                superpixel_range = range(len(max_segments + 1, image_superpixels + max_segments))
+            else:
+                superpixel_range = range(len(image_superpixels))
             # Generate addresses to save the superpixels and patches under.
-            superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
-            patch_addresses = [patch_dir / f"{image_num:03d}_{i:03d}.png" for i in range(len(image_superpixels))]
+            superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
+            patch_addresses = [patch_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
 
             # Save both the superpixels and patches to the generated addresses.
             save_images(superpixel_addresses, superpixels)
@@ -517,7 +533,7 @@ class ConceptDiscovery(object):
 
         return aggregated_out
     
-    def update_pca(self, bn, pca_n_components, img_paths, bs, activations_path)
+    def update_pca(self, bn, pca_n_components, img_paths, bs, activations_path):
 
         # Find the number of batches in each to allow for n_components
         # Use divmod to find the number of complete batches, then split the remainder across the batches.
@@ -532,7 +548,7 @@ class ConceptDiscovery(object):
         pca_batches_complete = 0
         current_pca_batch = []
 
-        for batch in activations_path.iterdir():
+        for batch in tqdm(activations_path.iterdir(), total=len(list(activations_path.iterdir())), desc="Loading activations and fitting on IncrementalPCA"):
 
             # Open the activation file and read it in.
             with open(batch, 'rb') as handle:

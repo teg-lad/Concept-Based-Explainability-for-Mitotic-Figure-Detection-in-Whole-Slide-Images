@@ -5,55 +5,74 @@ import sys
 
 sys.path.append(str(Path.cwd().absolute()))
 
-print(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-print((Path.cwd() / "Utils").absolute())
-
-print(sys.path)
-
 import Utils.ACE.ace_helpers as ace_helpers
 from Utils.ACE.ace import ConceptDiscovery
 
 def main():
-    # Create an output directory for our data
-    output = Path.cwd() / "ACE_mitotis_test/"
 
-    # Create the sub directories at the output location.
-    ace_helpers.create_directories(output, remove_old=False)
-    
     # Specify the target class and the source directory.
     # Note: The target class should be a folder in the source directory.
     # This folder should have a folder called discovery for images for concept discovery and a folder called tcav for tcav score calculation.
     target_class = "mitotic figure"
-    source_dir = "D:/DS/DS4/Project/Mitotic_figures/canine lymphoma"
+    source_dir = Path("D:/DS/DS4/Project/Mitotic_figures")
     
     # Create a list of the bottleneck layers.
     bottleneck_layers = ['backbone.body.layer1.2.conv1', 'backbone.body.layer2.3.conv1', 'backbone.body.layer3.5.conv1', 'backbone.body.layer4.2.conv1']
 
     # Create the model variable and set it to evaluate.
-    mymodel = ace_helpers.MyModel("tmp", bottleneck_layers)
-    mymodel.model.eval()
-    mymodel.model.model
+    mymodel = ace_helpers.MyModel("mitotic", bottleneck_layers)
     
-    # Creating the ConceptDiscovery class instance.
-    cd = ConceptDiscovery(
-        mymodel,
-        target_class,
-        source_dir,
-        output,
-        bottleneck_layers,
-        num_random_exp=2,
-        channel_mean=False,
-        min_imgs=50,
-        resize_dims=(512,512), pca_n_components=100)
+    tissue_types = ['canine cutaneous mast cell tumor', 'canine lung cancer', 'canine lymphoma', 'human breast cancer', 'human neuroendocrine tumor']
     
-    # Get the superpixel images.
-    superpixels_dir = cd.discovered_concepts_dir / "superpixels"
-    superpixel_images = np.array(list(superpixels_dir.iterdir()))
+    for tissue_type in tissue_types:
+        
+        curr_source_dir = source_dir / tissue_type
     
-    # Get the activations back after passing the superpixels.
-    activations = cd._get_activations(superpixel_images, bs=2)
-    
-    print()
+        # Create an output directory for our data
+        output = Path.cwd() / f"ACE_mitotis_{tissue_type}/"
+        
+        ace_helpers.create_directories(output, remove_old=False)
+
+        # Creating the ConceptDiscovery class instance.
+        cd = ConceptDiscovery(
+            mymodel,
+            target_class,
+            curr_source_dir,
+            output,
+            bottleneck_layers,
+            num_random_exp=50,
+            channel_mean=[True, True, False, False],
+            min_imgs=100,
+            resize_dims=(512,512),
+            pca_n_components=[250, 125, 800, 565])
+        
+        # Creating the dataset of image patches.
+        cd.create_patches(param_dict={'n_segments': [15]})
+        
+        
+        context_discovery_images = list((curr_source_dir / target_class / "context_discovery").iterdir())
+        # Create the context patches
+        cd.create_patches(param_dict={'n_segments': [5]}, discovery_images=context_discovery_images)
+
+        ace_helpers.save_discovery_images(cd)
+        
+        # Discovering Concepts
+        cd.discover_concepts(method='KM', param_dicts={'n_clusters': 25})
+        
+        # Save discovered concept images (resized and original sized)
+        ace_helpers.save_concepts(cd)
+        
+#         cd.initialize_random_concept_and_samples()
+        
+#         cav_accuracies = cd.cavs()
+        
+#         scores = cd.tcavs(test=False, sort=False)
+        
+#         cd.save_ace_report()
+        
+#         # Plot examples of discovered concepts
+#         for bn in cd.bottlenecks:
+#             cd.plot_concepts(bn, 10)
 
 
 def run_concept_discovery(output_dir, target_class, source_dir, model_params, cd_params, patch_params, clustering_params, cav_params, tcav_params):
