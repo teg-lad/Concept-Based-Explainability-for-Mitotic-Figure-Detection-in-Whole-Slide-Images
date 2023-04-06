@@ -44,7 +44,7 @@ class ConceptDiscovery(object):
 
     def __init__(self, model, target_class, source_dir, output_dir, bottlenecks, num_random_exp=2,
                  channel_mean=True, min_imgs=20, average_image_value=117, resize_dims=(512, 512),
-                 pca_n_components=2500):
+                 pca_n_components=1000):
         """
 
         :param model: A trained classification model on which we run the concept discovery algorithm.
@@ -83,7 +83,10 @@ class ConceptDiscovery(object):
         self.results_summaries_dir = self.output_dir / 'results_summaries/'
 
         # Save channel mean option.
-        self.channel_mean = channel_mean
+        if type(channel_mean) != list:
+            self.channel_mean = len(bottlenecks) * [channel_mean]
+        else:
+            self.channel_mean = channel_mean
 
         # Save image details
         #self.max_imgs = max_imgs
@@ -105,7 +108,10 @@ class ConceptDiscovery(object):
             with open(pca_file_path, 'rb') as handle:
                 self.pca = pickle.load(handle)
         
-        self.pca_n_components = pca_n_components
+        if type(pca_n_components) != list:
+            self.pca_n_components = len(bottlenecks) * [pca_n_components]
+        else:
+            self.pca_n_components = pca_n_components
     
     
     def initialize_random_concept_and_samples(self):
@@ -421,14 +427,11 @@ class ConceptDiscovery(object):
         output = []
         acts_processed = 0
         
-        if not self.channel_mean and self.pca == None:
+        if not all(self.channel_mean) and self.pca == None:
             
             print("The activations are being calculated and then PCA will be computed on the activations to lower the dimensionality. This will take some time.")
             
             self.pca = {}
-            
-            for bn in self.bottlenecks:
-                self.pca[bn] = IncrementalPCA(n_components=self.pca_n_components, copy=False)
             
             activations_path = self.output_dir / "acts/"
 #             superpixel_activation_path = activations_path / "superpixels/"
@@ -458,60 +461,14 @@ class ConceptDiscovery(object):
                     pickle.dump(activations, handle, protocol=pickle.HIGHEST_PROTOCOL)
                 
                 del activations
-                
             
-            # Find the number of batches in each to allow for n_components
-            # Use divmod to find the number of complete batches, then split the remainder across the batches.
-            num_batches, remainder = divmod(img_paths.shape[0], self.pca_n_components)
-            
-            # Use the floor rounding so we make sure the last batch always has enough. If we round up and take too much in the
-            # first batches we may be left short
-            activation_dicts_per_batches = (self.pca_n_components / bs) + math.floor(remainder / bs / num_batches)
             
             
             # Fit the IncrementalPCA for each bottleneck, load them individually so we can save memory.
-            for bn in self.bottlenecks:
+            for bn, pca_n_components in zip(self.bottlenecks, self.pca_n_components):
                 
-                pca_batches_complete = 0
-                current_pca_batch = []
-                
-                for batch in activations_path.iterdir():
-
-                    # Open the activation file and read it in.
-                    with open(batch, 'rb') as handle:
-                        activations = pickle.load(handle)
-
-                    current_pca_batch.append(activations[bn])
-                    
-                    del activations
-                    
-
-                    if pca_batches_complete < num_batches and len(current_pca_batch) == activation_dicts_per_batches:
-
-                        pca_batches_complete += 1
-                        
-                        # Take all the batch outputs for that layer and concatenate the results.
-                        aggregated_acts = np.concatenate(current_pca_batch)
-                        print(aggregated_acts.shape)
-                        
-                        sleep(5)
-
-                        self.pca[bn].partial_fit(aggregated_acts, check_input=False)
-                        print("Complete PCA run")
-                        
-                        del aggregated_acts
-                        current_pca_batch.clear()
-                    
-                sleep(5)
-                        
-                
-                if len(current_pca_batch) > 0:
-                    # Run the final batch through
-                    aggregated_acts = np.concatenate(current_pca_batch)
-
-                    self.pca[bn].partial_fit(aggregated_acts)
-            
-            
+                self.update_pca(bn, pca_n_components, img_paths, bs, activations_path)
+                 
             # Read in each activation file
             for act_path in activations_path.iterdir():
                 
@@ -526,9 +483,6 @@ class ConceptDiscovery(object):
                 # Save the activation output.
                 output.append(activations)
             
-            
-            with open(activations_path / "PCA.pkl", 'wb') as handle:
-                pickle.dump(self.pca, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         else:
             # Loop through all the image paths taking the batch size each time.
@@ -562,6 +516,63 @@ class ConceptDiscovery(object):
             aggregated_out[k] = np.concatenate(list(d[k] for d in output))
 
         return aggregated_out
+    
+    def update_pca(self, bn, pca_n_components, img_paths, bs, activations_path)
+
+        # Find the number of batches in each to allow for n_components
+        # Use divmod to find the number of complete batches, then split the remainder across the batches.
+        num_batches, remainder = divmod(img_paths.shape[0], pca_n_components)
+
+        # Use the floor rounding so we make sure the last batch always has enough. If we round up and take too much in the
+        # first batches we may be left short
+        activation_dicts_per_batches = (pca_n_components / bs) + math.floor(remainder / bs / num_batches)
+
+        self.pca[bn] = IncrementalPCA(n_components=pca_n_components, copy=False)
+
+        pca_batches_complete = 0
+        current_pca_batch = []
+
+        for batch in activations_path.iterdir():
+
+            # Open the activation file and read it in.
+            with open(batch, 'rb') as handle:
+                activations = pickle.load(handle)
+
+            current_pca_batch.append(activations[bn])
+
+            del activations
+
+
+            if pca_batches_complete < num_batches and len(current_pca_batch) == activation_dicts_per_batches:
+
+                pca_batches_complete += 1
+
+                # Take all the batch outputs for that layer and concatenate the results.
+                aggregated_acts = np.concatenate(current_pca_batch)
+                print(aggregated_acts.shape)
+
+                sleep(5)
+
+                self.pca[bn].partial_fit(aggregated_acts, check_input=False)
+                print("Complete PCA run")
+
+                sleep(10)
+
+                del aggregated_acts
+                current_pca_batch.clear()
+
+        sleep(5)
+
+
+        if len(current_pca_batch) > 0:
+            # Run the final batch through
+            aggregated_acts = np.concatenate(current_pca_batch)
+
+            self.pca[bn].partial_fit(aggregated_acts)
+
+
+        with open(activations_path / "PCA.pkl", 'wb') as handle:
+            pickle.dump(self.pca, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def _cluster(self, acts, method='KM', param_dict=None):
         """Runs unsupervised clustering algorithm on concept actiavtations.

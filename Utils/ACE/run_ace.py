@@ -1,5 +1,14 @@
 from pathlib import Path
 import numpy as np
+import os
+import sys
+
+sys.path.append(str(Path.cwd().absolute()))
+
+print(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+print((Path.cwd() / "Utils").absolute())
+
+print(sys.path)
 
 import Utils.ACE.ace_helpers as ace_helpers
 from Utils.ACE.ace import ConceptDiscovery
@@ -44,7 +53,7 @@ def main():
     # Get the activations back after passing the superpixels.
     activations = cd._get_activations(superpixel_images, bs=2)
     
-    print([acts.shape for key, acts in activations.items()])
+    print()
 
 
 def run_concept_discovery(output_dir, target_class, source_dir, model_params, cd_params, patch_params, clustering_params, cav_params, tcav_params):

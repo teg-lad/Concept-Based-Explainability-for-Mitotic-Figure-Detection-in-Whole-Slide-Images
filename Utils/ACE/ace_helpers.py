@@ -20,6 +20,9 @@ from pathlib import Path
 
 import torchvision
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 from Utils.model_wrapper import ModelWrapper
 
 
@@ -57,6 +60,9 @@ class MyModel():
         self.model.to(self.device)
 
     def run_examples(self, imgs, get_mean=True, bn=None):
+        
+        if type(get_mean) != list:
+            get_mean = len(self.model.layers) * [get_mean]
 
         tensor_imgs = torch.from_numpy(imgs).float()
 
@@ -72,10 +78,12 @@ class MyModel():
             self.model(tensor_imgs)
             acts = self.model.intermediate_activations
             
-        if get_mean:
-            flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in acts.items()}
-        else:
-            flattened = {k: torch.flatten(v.detach().cpu(), start_dim=1) for k, v in acts.items()}
+        for k, v, channel_mean in zip(acts.keys(), acts.values(), get_mean):
+            
+            if channel_mean:
+                flattened[k] = torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1)
+            else:
+                flattened[k] = torch.flatten(v.detach().cpu(), start_dim=1)
             
         output = {k: list(v.numpy()) for k, v in flattened.items()}
         
