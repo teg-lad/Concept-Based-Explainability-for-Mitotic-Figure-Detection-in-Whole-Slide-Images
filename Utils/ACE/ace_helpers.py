@@ -97,6 +97,9 @@ class MyModel():
     
     def get_gradient(self, imgs, class_id, get_mean=True, return_info=True, test=False):
         
+        if type(get_mean) != list:
+            get_mean = len(self.model.layers) * [get_mean]
+        
         tensor_imgs = torch.stack(imgs)
         
         del imgs
@@ -110,10 +113,12 @@ class MyModel():
         
         gradients, info = self.model.generate_gradients(class_id, test=test)
         
-        if get_mean:
-            flattened = {k: torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1) for k, v in gradients.items()}
-        else:
-            flattened = {k: torch.flatten(v.detach().cpu(), start_dim=1) for k, v in gradients.items()}
+        for k, v, channel_mean in zip(gradients.keys(), gradients.values(), get_mean):
+            
+            if channel_mean:
+                flattened[k] = torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1)
+            else:
+                flattened[k] = torch.flatten(v.detach().cpu(), start_dim=1)
             
         output = {k: v.numpy() for k, v in flattened.items()}
         

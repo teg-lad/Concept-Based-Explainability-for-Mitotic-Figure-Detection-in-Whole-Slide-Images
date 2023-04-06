@@ -1026,18 +1026,26 @@ class ConceptDiscovery(object):
             # Iterate through the layers we have and add the corresponding gradients to our total for the layer.
             for layer, vals in img_gradients.items():
                 
-                #
-                if self.channel_mean:
-                    final_vals = self.pca[layer].transform(vals)
-                else:
-                    final_vals = vals
-                
                 # Add these gradients to the total we have collected so far
                 gradients[layer].append(final_vals)
 
-#         #Convert the lists to numpy arrays
-#         for k, v in gradients.items():
-#             gradients[k] = np.vstack(v)
+            #
+        if self.channel_mean:
+            final_vals = self.pca[layer].transform(vals)
+        else:
+            final_vals = vals
+            
+        #Convert the lists to numpy arrays
+        for k, v in gradients.items():
+            
+            if not all(self.channel_mean):
+            
+                stacked_gradients = np.vstack(v)
+
+                gradients[k] = self.pca[layer].transform(stacked_gradients)
+            
+            else:
+                gradients[k] = np.vstack(v)
 
         return gradients, total_info
 
