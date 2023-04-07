@@ -29,7 +29,7 @@ def main():
         curr_source_dir = source_dir / tissue_type
     
         # Create an output directory for our data
-        output = Path.cwd() / f"ACE_mitotis_{tissue_type}/"
+        output = Path("D:/FYP") / f"ACE_mitotis_{tissue_type}/"
         
         ace_helpers.create_directories(output, remove_old=False)
 
@@ -47,17 +47,17 @@ def main():
             pca_n_components=[250, 125, 800, 565])
         
         # Creating the dataset of image patches.
-        cd.create_patches(param_dict={'n_segments': [15]})
+        cd.create_patches(param_dict={'n_segments': [10]})
         
         
         context_discovery_images = list((curr_source_dir / target_class / "context_discovery").iterdir())
         # Create the context patches
-        cd.create_patches(param_dict={'n_segments': [5]}, discovery_images=context_discovery_images)
+        cd.create_patches(param_dict={'n_segments': [4]}, discovery_images=context_discovery_images)
 
-        ace_helpers.save_discovery_images(cd)
+        ace_helpers.save_discovery_images(cd,save_context=True)
         
         # Discovering Concepts
-        cd.discover_concepts(method='KM', param_dicts={'n_clusters': 25})
+        cd.discover_concepts(method='KM', param_dicts={'n_clusters': 50})
         
         # Save discovered concept images (resized and original sized)
         ace_helpers.save_concepts(cd)

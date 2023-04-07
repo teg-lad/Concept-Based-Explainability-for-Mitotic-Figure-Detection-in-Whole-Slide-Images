@@ -217,6 +217,21 @@ class ConceptDiscovery(object):
         
         max_segments = None
         
+        # If we have not specified discovery images, we must load them.
+        if discovery_images is None:
+
+            # Get the list of discovery image paths.
+            concept_dir = self.source_dir / self.target_class / "discovery"
+            
+            # Save the list of discovery images paths
+            self.discovery_images = list(concept_dir.iterdir())
+            
+
+        # Otherwise, we can use the ones that have been supplied.
+        else:
+            self.discovery_images = discovery_images
+
+        
         if superpixel_dir.exists():
             
             if not discovery_images:
@@ -237,22 +252,9 @@ class ConceptDiscovery(object):
         # Create empty lists for storing the superpixels, image numbers and patches.
         dataset, image_numbers, patches = [], [], []
 
-        # If we have not specified discovery images, we must load them.
-        if discovery_images is None:
-
-            # Get the list of discovery image paths.
-            concept_dir = self.source_dir / self.target_class / "discovery"
-            
-            # Save the list of discovery images paths
-            self.discovery_images = list(concept_dir.iterdir())
-            
-
-        # Otherwise, we can use the ones that have been supplied.
-        else:
-            self.discovery_images = discovery_images
-
         # For every image in the set.
         for image_num, img_path in enumerate(tqdm(self.discovery_images, total=len(self.discovery_images))):
+            
             # Get the superpixels for this image using the given method.
             img = load_image_from_file(img_path, self.resize_dims)
             
@@ -270,12 +272,16 @@ class ConceptDiscovery(object):
             
     
             if max_segments:
-                superpixel_range = range(len(max_segments + 1, image_superpixels + max_segments))
+                superpixel_range = range(max_segments + 1, len(image_superpixels) + max_segments + 1)
             else:
                 superpixel_range = range(len(image_superpixels))
+                
             # Generate addresses to save the superpixels and patches under.
             superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
             patch_addresses = [patch_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
+            
+            if superpixel_addresses[0].exists():
+                return
 
             # Save both the superpixels and patches to the generated addresses.
             save_images(superpixel_addresses, superpixels)

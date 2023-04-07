@@ -77,7 +77,9 @@ class MyModel():
         with torch.no_grad():
             self.model(tensor_imgs)
             acts = self.model.intermediate_activations
-            
+        
+        flattened = {}
+        
         for k, v, channel_mean in zip(acts.keys(), acts.values(), get_mean):
             
             if channel_mean:
@@ -112,6 +114,8 @@ class MyModel():
         del tensor_imgs
         
         gradients, info = self.model.generate_gradients(class_id, test=test)
+        
+        flattened = {}
         
         for k, v, channel_mean in zip(gradients.keys(), gradients.values(), get_mean):
             
@@ -472,7 +476,7 @@ def save_concepts(cd, bs=32):
                 save_images(patch_addresses, patches)
                 save_images(image_addresses, superpixels)
 
-def save_discovery_images(cd, bs=32):
+def save_discovery_images(cd, bs=32, save_context=False):
     """
     Save the discovery images
     
@@ -480,9 +484,13 @@ def save_discovery_images(cd, bs=32):
     cd: The ConceptDiscovery instance the concepts of which we want to save 
     """
     
-    if cd.discovery_images == None:
-        # Get the list of discovery image paths.
-        concept_dir = cd.source_dir / cd.target_class / "discovery"
+    if cd.discovery_images == None or save_context:
+        
+        if save_context:
+            # Get the list of discovery image paths.
+            concept_dir = cd.source_dir / cd.target_class / "context_discovery"
+        else:
+            concept_dir = cd.source_dir / cd.target_class / "discovery"
 
         # Save the list of discovery images paths
         self.discovery_images = list(concept_dir.iterdir())
