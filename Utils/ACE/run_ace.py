@@ -47,14 +47,14 @@ def main():
             pca_n_components=[250, 125, 800, 565])
         
         # Creating the dataset of image patches.
-        cd.create_patches(param_dict={'n_segments': [10]})
+        patches_created = cd.create_patches(param_dict={'n_segments': [10]})
         
-        
-        context_discovery_images = list((curr_source_dir / target_class / "context_discovery").iterdir())
-        # Create the context patches
-        cd.create_patches(param_dict={'n_segments': [4]}, discovery_images=context_discovery_images)
+        if patches_created:
+            context_discovery_images = list((curr_source_dir / target_class / "context_discovery").iterdir())
+            # Create the context patches
+            cd.create_patches(param_dict={'n_segments': [4]}, discovery_images=context_discovery_images)
 
-        ace_helpers.save_discovery_images(cd,save_context=True)
+            ace_helpers.save_discovery_images(cd,save_context=True)
         
         # Discovering Concepts
         cd.discover_concepts(method='KM', param_dicts={'n_clusters': 50})

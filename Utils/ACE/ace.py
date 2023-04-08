@@ -235,7 +235,8 @@ class ConceptDiscovery(object):
         if superpixel_dir.exists():
             
             if not discovery_images:
-                return
+                return False
+            
             else:
                 # Get the largest number of segments we have got for a discovery image so far.
                 max_segments = max([int(file.name.split("_")[1][:3]) for file in superpixel_dir.iterdir()])
@@ -279,13 +280,12 @@ class ConceptDiscovery(object):
             # Generate addresses to save the superpixels and patches under.
             superpixel_addresses = [superpixel_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
             patch_addresses = [patch_dir / f"{image_num:03d}_{i:03d}.png" for i in superpixel_range]
-            
-            if superpixel_addresses[0].exists():
-                return
 
             # Save both the superpixels and patches to the generated addresses.
             save_images(superpixel_addresses, superpixels)
             save_images(patch_addresses, patches)
+            
+        return True
 
     def _return_superpixels(self, img, method='slic', channel_axis=2, param_dict=None):
         """Returns all patches for one image.
@@ -544,11 +544,18 @@ class ConceptDiscovery(object):
         # Find the number of batches in each to allow for n_components
         # Use divmod to find the number of complete batches, then split the remainder across the batches.
         num_batches, remainder = divmod(img_paths.shape[0], pca_n_components)
+        print(num_batches, remainder)
+        print(pca_n_components, bs)
 
         # Use the floor rounding so we make sure the last batch always has enough. If we round up and take too much in the
         # first batches we may be left short
-        activation_dicts_per_batches = (pca_n_components / bs) + math.floor(remainder / bs / num_batches)
-
+        try:
+            activation_dicts_per_batches = (pca_n_components / bs) + math.floor(remainder / bs / num_batches)
+        except ZeroDivisionError:
+            image_count = img_paths.shape[0]
+            print(f"There are {image_count} images and at least {pca_n_components} are needed to make a batch for PCA as this is the number of components selected. Please add more samples or reduce the number of components.")
+            return
+    
         self.pca[bn] = IncrementalPCA(n_components=pca_n_components, copy=False)
 
         pca_batches_complete = 0
@@ -565,7 +572,7 @@ class ConceptDiscovery(object):
             del activations
 
 
-            if pca_batches_complete < num_batches and len(current_pca_batch) == activation_dicts_per_batches:
+            if pca_batches_complete < num_batches - 1 and len(current_pca_batch) == activation_dicts_per_batches:
 
                 pca_batches_complete += 1
 
@@ -573,18 +580,11 @@ class ConceptDiscovery(object):
                 aggregated_acts = np.concatenate(current_pca_batch)
                 print(aggregated_acts.shape)
 
-                sleep(5)
-
                 self.pca[bn].partial_fit(aggregated_acts, check_input=False)
                 print("Complete PCA run")
 
-                sleep(10)
-
                 del aggregated_acts
                 current_pca_batch.clear()
-
-        sleep(5)
-
 
         if len(current_pca_batch) > 0:
             # Run the final batch through
@@ -593,7 +593,7 @@ class ConceptDiscovery(object):
             self.pca[bn].partial_fit(aggregated_acts)
 
 
-        with open(activations_path / "PCA.pkl", 'wb') as handle:
+        with open(self.output_dir / "PCA.pkl", 'wb') as handle:
             pickle.dump(self.pca, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def _cluster(self, acts, method='KM', param_dict=None):
