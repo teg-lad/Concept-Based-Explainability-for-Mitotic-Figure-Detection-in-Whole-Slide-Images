@@ -93,7 +93,7 @@ class ModelWrapper(object):
 
         return hook
 
-    def generate_gradients(self, c, test=False):
+    def generate_gradients(self, c):
         """
         This function inserts hooks into activation tensors so that the gradients can be extracted when a backwards pass of
         the network is carried out. This function works best with one image being ran through at a time, though it will work
@@ -103,6 +103,7 @@ class ModelWrapper(object):
         # Initialize storage for the gradients and the detection info.
         grad_output = {}
         detection_info = []
+        gradients_found = False
         
         # For every layer.
         for bn in self.layers:
@@ -132,22 +133,21 @@ class ModelWrapper(object):
                 # Get this specific logit and call backward
                 logit = logits[i, c]
                 logit.backward(torch.ones_like(logit), retain_graph=True)
+                gradients_found = True
                 
                 # For every layer we have hooks in, save their gradient.
                 for bn in self.layers:
                     grad_output[bn].append(self.gradients[bn].cpu().detach())
                     
-                    # Testing to see if the gradients need to be reset.
-                    if test:
-                        self.intermediate_activations[bn].grad.zero_()
-
+        # Check that we have gradients and that there has been a predictions
+        if gradients_found:
+            # For every layer we can concatenate the tensors into one tensor.
+            for bn in self.layers:
+                grad_output[bn] = torch.cat(grad_output[bn], dim=0)
+                
         # Delete these to save memory.
         del self.predictions
         del self.class_logits
-        
-        # For every layer we can concatenate the tensors into one tensor.
-        for bn in self.layers:
-            grad_output[bn] = torch.cat(grad_output[bn], dim=0)
     
         return grad_output, detection_info
 
