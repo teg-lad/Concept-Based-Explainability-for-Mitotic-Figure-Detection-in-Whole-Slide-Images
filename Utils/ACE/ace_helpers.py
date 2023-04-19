@@ -114,17 +114,21 @@ class MyModel():
         del tensor_imgs
         
         gradients, info = self.model.generate_gradients(class_id)
+
+        if len(list(gradients.values())[0]) > 0:
+            flattened = {}
+
+            for k, v, channel_mean in zip(gradients.keys(), gradients.values(), get_mean):
+
+                if channel_mean:
+                    flattened[k] = torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1)
+                else:
+                    flattened[k] = torch.flatten(v.detach().cpu(), start_dim=1)
+
+            output = {k: v.numpy() for k, v in flattened.items()}
         
-        flattened = {}
-        
-        for k, v, channel_mean in zip(gradients.keys(), gradients.values(), get_mean):
-            
-            if channel_mean:
-                flattened[k] = torch.flatten(torch.mean(v.detach(), dim=1).cpu(), start_dim=1)
-            else:
-                flattened[k] = torch.flatten(v.detach().cpu(), start_dim=1)
-            
-        output = {k: v.numpy() for k, v in flattened.items()}
+        else:
+            output = None
         
         return output, info
     

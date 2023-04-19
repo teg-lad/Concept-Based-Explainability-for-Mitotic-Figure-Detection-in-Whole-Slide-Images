@@ -455,7 +455,7 @@ class ConceptDiscovery(object):
         
         activations_path = self.output_dir / "acts/"
         
-        if not all(self.channel_mean) and self.pca == None and img_paths.shape[0] == 0:
+        if not all(self.channel_mean) and self.pca == None and img_paths is None:
             
             superpixels_dir = self.discovered_concepts_dir / "superpixels"
             img_paths = np.array(list(superpixels_dir.iterdir()))
@@ -514,7 +514,7 @@ class ConceptDiscovery(object):
                 output.append(activations)
             
 
-        elif len(list(activations_path.iterdir())) > 0 and img_paths.shape[0] == 0:
+        elif len(list(activations_path.iterdir())) > 0 and img_paths is None:
             
             activations_path_list = list(activations_path.iterdir())
             
@@ -572,8 +572,8 @@ class ConceptDiscovery(object):
         # Find the number of batches in each to allow for n_components
         # Use divmod to find the number of complete batches, then split the remainder across the batches.
         num_batches, remainder = divmod(img_paths.shape[0], pca_n_components)
-        print(num_batches, remainder)
-        print(pca_n_components, bs)
+#         print(num_batches, remainder)
+#         print(pca_n_components, bs)
 
         # Use the floor rounding so we make sure the last batch always has enough. If we round up and take too much in the
         # first batches we may be left short
@@ -606,7 +606,7 @@ class ConceptDiscovery(object):
 
                 # Take all the batch outputs for that layer and concatenate the results.
                 aggregated_acts = np.concatenate(current_pca_batch)
-                print(aggregated_acts.shape)
+#                 print(aggregated_acts.shape)
                 
                 try:
                     self.pca[bn].partial_fit(aggregated_acts, check_input=False)
@@ -792,7 +792,7 @@ class ConceptDiscovery(object):
         patch_images = np.array(list(patches_dir.iterdir()))
 
         # Get the activations back after passing the superpixels.
-        activations = self._get_activations(np.array(), bs=bs)
+        activations = self._get_activations(None, bs=bs)
 
         # For every bottleneck we will cluster.
         for bn in tqdm(self.bottlenecks, total=len(self.bottlenecks), desc="Clustering to find potential concepts"):
@@ -817,10 +817,7 @@ class ConceptDiscovery(object):
                 if len(label_idxs) > self.min_imgs:
 
                     # Add the details for this cluster to the dic for the current bottleneck layer.
-                    print(len(bn_dic['cost'][label_idxs]))
                     concept_costs = bn_dic['cost'][label_idxs]
-                    print("Label indexes", len(label_idxs))
-                    print("Concept cost", len(concept_costs))
                     concept_idxs = label_idxs[np.argsort(concept_costs)]
                     concept_image_numbers = set([int(p.name.split("_")[0]) for p in patch_images[label_idxs]])
                     highly_common_concept = len(
@@ -1082,6 +1079,9 @@ class ConceptDiscovery(object):
 
             # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
             img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean)
+            
+            if img_gradients is None:
+                continue
 
             del img
 
@@ -1094,26 +1094,25 @@ class ConceptDiscovery(object):
             # Iterate through the layers we have and add the corresponding gradients to our total for the layer.
             for layer, vals in img_gradients.items():
                 
-                # Add these gradients to the total we have collected so far
-                gradients[layer].append(final_vals)
+                if not all(self.channel_mean):
+                    gradients[layer].append(self.pca[layer].transform(vals)) 
+                else:
+                
+                    # Add these gradients to the total we have collected so far
+                    gradients[layer].append(vals)
 
-            #
-        if self.channel_mean:
-            final_vals = self.pca[layer].transform(vals)
-        else:
-            final_vals = vals
             
         #Convert the lists to numpy arrays
         for k, v in gradients.items():
             
-            if not all(self.channel_mean):
+#             if not all(self.channel_mean):
             
-                stacked_gradients = np.vstack(v)
+#                 stacked_gradients = np.vstack(v)
 
-                gradients[k] = self.pca[layer].transform(stacked_gradients)
+#                 gradients[k] = self.pca[k].transform(stacked_gradients)
             
-            else:
-                gradients[k] = np.vstack(v)
+#             else:
+            gradients[k] = np.vstack(v)
 
         return gradients, total_info
 
