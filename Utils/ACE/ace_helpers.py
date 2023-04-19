@@ -97,7 +97,7 @@ class MyModel():
         
         return default[label]
     
-    def get_gradient(self, imgs, class_id, get_mean=True, return_info=True, test=False):
+    def get_gradient(self, imgs, class_id, get_mean=True, return_info=True):
         
         if type(get_mean) != list:
             get_mean = len(self.model.layers) * [get_mean]
@@ -113,7 +113,7 @@ class MyModel():
         
         del tensor_imgs
         
-        gradients, info = self.model.generate_gradients(class_id, test=test)
+        gradients, info = self.model.generate_gradients(class_id)
         
         flattened = {}
         
@@ -493,7 +493,8 @@ def save_discovery_images(cd, bs=32, save_context=False):
             concept_dir = cd.source_dir / cd.target_class / "discovery"
 
         # Save the list of discovery images paths
-        cd.discovery_images = list(concept_dir.iterdir())
+        self.discovery_images = list(concept_dir.iterdir())
+    
     
     image_dir = cd.discovered_concepts_dir / 'images'
     image_dir.mkdir(parents=True, exist_ok=True)
@@ -502,11 +503,11 @@ def save_discovery_images(cd, bs=32, save_context=False):
         
         current_batch = cd.discovery_images[i * bs:(i + 1) * bs]
         images = np.array([load_image_from_file(img, cd.resize_dims) for img in current_batch])
-#         converted_images = (images * 256).astype(np.uint8)
+        converted_images = (images * 256).astype(np.uint8)
         
         image_addresses = [image_dir / f"{img.name}.png" for img in current_batch]
 
-        save_images(image_addresses, images)
+        save_images(image_addresses, converted_images)
             
 def save_images(addresses, images):
     """Save images in the addresses.

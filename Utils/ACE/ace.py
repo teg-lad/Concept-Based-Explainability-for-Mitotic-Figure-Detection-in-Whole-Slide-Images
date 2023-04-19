@@ -101,7 +101,7 @@ class ConceptDiscovery(object):
         self.pca = None
             
         # Variable for saving instances of PCA for converting activations and gradients to the new space.
-        pca_file_path = self.activation_dir / "PCA.pkl"
+        pca_file_path = self.output_dir / "PCA.pkl"
         if pca_file_path.is_file():
             
             # Open the activation file and read it in.
@@ -119,6 +119,10 @@ class ConceptDiscovery(object):
         This function create a folder for a random concept and creates random samples of
         from all of the superpixels for training the discovered concepts against.
         """
+        random_dir = self.discovered_concepts_dir / "Random"
+        
+        if random_dir.exists():
+            return
         
         # Get the list of superpixels.
         superpixels = self.discovered_concepts_dir / "superpixels"
@@ -129,7 +133,7 @@ class ConceptDiscovery(object):
         random_concept_superpixels = np.array(random.sample(list_of_files, self.min_imgs))
         
         # Save these images to a subfolder called Concept in Random.
-        destination = self.discovered_concepts_dir / "Random" / self.random_concept / "superpixels"
+        destination = random_dir / self.random_concept / "superpixels"
         destination.mkdir(parents=True, exist_ok=True)
         
         # Save the random concept images.
@@ -141,7 +145,7 @@ class ConceptDiscovery(object):
         
                 
         # Save these images to a subfolder called Concept in Random.
-        destination = self.discovered_concepts_dir / "Random" / self.random_concept / "patches"
+        destination = random_dir / self.random_concept / "patches"
         destination.mkdir(parents=True, exist_ok=True)
         
         # Save the random concept images.
@@ -158,7 +162,7 @@ class ConceptDiscovery(object):
             random_sample_imgs =  np.array(random.sample(list_of_files, self.min_imgs))
         
             # Create the directory to store the images.
-            destination = self.discovered_concepts_dir / "Random" / random_num
+            destination = random_dir / random_num
             destination.mkdir(parents=True, exist_ok=True)
                 
             # Save the random sample.
@@ -449,13 +453,17 @@ class ConceptDiscovery(object):
         output = []
         acts_processed = 0
         
-        if not all(self.channel_mean) and self.pca == None:
+        activations_path = self.output_dir / "acts/"
+        
+        if not all(self.channel_mean) and self.pca == None and img_paths.shape[0] == 0:
+            
+            superpixels_dir = self.discovered_concepts_dir / "superpixels"
+            img_paths = np.array(list(superpixels_dir.iterdir()))
             
             print("The activations are being calculated and then PCA will be computed on the activations to lower the dimensionality. This will take some time.")
             
             self.pca = {}
             
-            activations_path = self.output_dir / "acts/"
 #             superpixel_activation_path = activations_path / "superpixels/"
             
             # Loop through all the image paths taking the batch size each time.
@@ -489,7 +497,7 @@ class ConceptDiscovery(object):
             # Fit the IncrementalPCA for each bottleneck, load them individually so we can save memory.
             for bn, pca_n_components in zip(self.bottlenecks, self.pca_n_components):
                 
-                self.update_pca(bn, pca_n_components, img_paths, bs, activations_path)
+                self.update_pca(bn, pca_n_components, img_paths, bs)
                  
             # Read in each activation file
             for act_path in activations_path.iterdir():
@@ -506,6 +514,25 @@ class ConceptDiscovery(object):
                 output.append(activations)
             
 
+        elif len(list(activations_path.iterdir())) > 0 and img_paths.shape[0] == 0:
+            
+            activations_path_list = list(activations_path.iterdir())
+            
+            # Read in each activation file
+            for act_path in tqdm(activations_path_list, total=len(activations_path_list), desc="Reading and transforming activations"):
+                
+                # Open the activation file and read it in.
+                with open(act_path, 'rb') as handle:
+                    activations = pickle.load(handle)
+                
+                # Convert the values in each dimension
+                for bn in self.bottlenecks:
+                    activations[bn] = self.pca[bn].transform(activations[bn])
+            
+                # Save the activation output.
+                output.append(activations)
+            
+        
         else:
             # Loop through all the image paths taking the batch size each time.
             for i in tqdm(range(ceildiv(img_paths.shape[0], bs)), total=ceildiv(img_paths.shape[0], bs),
@@ -522,9 +549,8 @@ class ConceptDiscovery(object):
 
                 activations = self.model.run_examples(np.array(imgs), self.channel_mean)
 
-                if not self.channel_mean:
-                    for bn in self.bottlenecks:
-                        activations[bn] = self.pca[bn].transform(activations[bn])
+                for bn in self.bottlenecks:
+                    activations[bn] = self.pca[bn].transform(activations[bn])
 
                 output.append(activations)
 
@@ -539,7 +565,9 @@ class ConceptDiscovery(object):
 
         return aggregated_out
     
-    def update_pca(self, bn, pca_n_components, img_paths, bs, activations_path):
+    def update_pca(self, bn, pca_n_components, img_paths, bs):
+        
+        activations_path = self.output_dir / "acts/"
 
         # Find the number of batches in each to allow for n_components
         # Use divmod to find the number of complete batches, then split the remainder across the batches.
@@ -579,8 +607,11 @@ class ConceptDiscovery(object):
                 # Take all the batch outputs for that layer and concatenate the results.
                 aggregated_acts = np.concatenate(current_pca_batch)
                 print(aggregated_acts.shape)
-
-                self.pca[bn].partial_fit(aggregated_acts, check_input=False)
+                
+                try:
+                    self.pca[bn].partial_fit(aggregated_acts, check_input=False)
+                except:
+                    print(len(current_pca_batch), activation_dicts_per_batches)
                 print("Complete PCA run")
 
                 del aggregated_acts
@@ -709,7 +740,7 @@ class ConceptDiscovery(object):
         # Return the smallest of the images in the directory or the max allowed.
         return len(discovery_images)
 
-    def discover_concepts(self, method='KM', activations=None, param_dicts=None, bs=2):
+    def discover_concepts(self, method='KM', param_dicts=None, bs=2):
         """Discovers the frequent occurring concepts in the target class.
 
         Calculates self.dic, a dictionary containing all the information of the
@@ -730,9 +761,16 @@ class ConceptDiscovery(object):
                    bottlenecks.
         """
 
+        # We will check if there are any concepts, if there isn't one we need to discover concepts.
+        if (self.cav_dir / 'concept_dict.pkl').exists():
+            print("A concept dictionary has been found, these concepts will be used for this run.")
+            return False
+    
+        
         # If a param dict is not specified use an empty one.
         if param_dicts is None:
             param_dicts = {}
+            
         # Make sure that the param dict has the bottleneck layers as keys with params for each.
         if set(param_dicts.keys()) != set(self.bottlenecks):
             param_dicts = {bn: param_dicts for bn in self.bottlenecks}
@@ -744,20 +782,20 @@ class ConceptDiscovery(object):
         discovery_size = self.discovery_images_size(self.target_class)
 
         # If we don't have any or are missing activations, get them.
-        if activations is None or set(self.bottlenecks) != set(activations.keys()):
-            # Get the superpixel images.
-            superpixels_dir = self.discovered_concepts_dir / "superpixels"
-            superpixel_images = np.array(list(superpixels_dir.iterdir()))
+        
+        # Get the superpixel images.
+        superpixels_dir = self.discovered_concepts_dir / "superpixels"
+        superpixel_images = np.array(list(superpixels_dir.iterdir()))
 
-            # Get the patch images.
-            patches_dir = self.discovered_concepts_dir / "patches"
-            patch_images = np.array(list(patches_dir.iterdir()))
+        # Get the patch images.
+        patches_dir = self.discovered_concepts_dir / "patches"
+        patch_images = np.array(list(patches_dir.iterdir()))
 
-            # Get the activations back after passing the superpixels.
-            activations = self._get_activations(superpixel_images, bs=bs)
+        # Get the activations back after passing the superpixels.
+        activations = self._get_activations(np.array(), bs=bs)
 
         # For every bottleneck we will cluster.
-        for bn in self.bottlenecks:
+        for bn in tqdm(self.bottlenecks, total=len(self.bottlenecks), desc="Clustering to find potential concepts"):
 
             # Dictionary to store results and get the activations.
             bn_dic = {}
@@ -779,7 +817,10 @@ class ConceptDiscovery(object):
                 if len(label_idxs) > self.min_imgs:
 
                     # Add the details for this cluster to the dic for the current bottleneck layer.
+                    print(len(bn_dic['cost'][label_idxs]))
                     concept_costs = bn_dic['cost'][label_idxs]
+                    print("Label indexes", len(label_idxs))
+                    print("Concept cost", len(concept_costs))
                     concept_idxs = label_idxs[np.argsort(concept_costs)]
                     concept_image_numbers = set([int(p.name.split("_")[0]) for p in patch_images[label_idxs]])
                     highly_common_concept = len(
@@ -814,6 +855,8 @@ class ConceptDiscovery(object):
 
         # Save the concept dict so we don't need to recompute it later.
         self.save_concept_dict()
+        
+        return True
 
     def save_concept_dict(self):
         """
@@ -892,6 +935,9 @@ class ConceptDiscovery(object):
         # If we don't have the concept dic, load it.
         if not hasattr(self, "dic"):
             self.load_concept_dict()
+            
+        if len(list(self.cav_dir.iterdir())) > 1:
+            return
         
         # Get the Random directory.
         random_dir = self.discovered_concepts_dir / "Random"
@@ -925,7 +971,7 @@ class ConceptDiscovery(object):
         concept_acts_dict = {}
         
         # For every bottleneck.
-        for bn in self.bottlenecks:
+        for bn in tqdm(self.bottlenecks, total=len(self.bottlenecks), desc="Finding CAVs for all concepts in each bottleneck"):
             
             def random_helper(random, random_acts):
                 return self._concept_cavs(bn, self.random_concept, random, rnd_concept_acts[bn], random_acts[bn], ow=ow)
@@ -1007,7 +1053,7 @@ class ConceptDiscovery(object):
                 concepts.append(self.dic[bn]['concepts'][idx])
             self.dic[bn]['concepts'] = concepts
 
-    def _return_gradients(self, images, paths=True, test=False):
+    def _return_gradients(self, images, paths=True):
         """
         For the given images, calculate a dictionary of gradients for each layer.
         The corresponding images and detection info is returned.
@@ -1035,7 +1081,7 @@ class ConceptDiscovery(object):
                 img = images[i]
 
             # Pass the image to the get_gradient method and capture the returned gradients and corresponding info.
-            img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean, test=test)
+            img_gradients, detection_info = self.model.get_gradient(img, class_id, self.channel_mean)
 
             del img
 
