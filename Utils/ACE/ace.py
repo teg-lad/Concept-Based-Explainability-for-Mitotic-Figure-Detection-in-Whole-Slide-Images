@@ -16,7 +16,7 @@ import math
 from time import sleep
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -1173,7 +1173,7 @@ class ConceptDiscovery(object):
         
 
         # For every bottleneck and concept
-        for bn in self.bottlenecks:
+        for bn in tqdm(self.bottlenecks, total=len(self.bottlenecks), desc="Calculating TCAV scores for all concepts in each bottleneck"):
             
             for concept in self.dic[bn]['concepts'] + [self.random_concept]:
                 
@@ -1452,3 +1452,257 @@ class ConceptDiscovery(object):
             fig.savefig(f)
         plt.clf()
         plt.close(fig)
+
+    def plot_concepts(self, bn, num=10, mode='diverse', concepts=None):
+        """Plots examples of discovered concepts.
+
+        Args:
+        cd: The concept discovery instance
+        bn: Bottleneck layer name
+        num: Number of images to print out of each concept
+        address: If not None, saves the output to the address as a .PNG image
+        mode: If 'diverse', it prints one example of each of the target class images
+          is coming from. If 'radnom', randomly samples exmples of the concept. If
+          'max', prints out the most activating examples of that concept.
+        concepts: If None, prints out examples of all discovered concepts.
+          Otherwise, it should be either a list of concepts to print out examples of
+          or just one concept's name
+
+        Raises:
+        ValueError: If the mode is invalid.
+        """
+        
+        # If we don't have the concept dictionary, load it in.
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+        
+        if not hasattr(self, "discovery_images"):
+
+            # Get the list of discovery image paths.
+            concept_dir = self.source_dir / self.target_class / "discovery"
+            
+            # Save the list of discovery images paths
+            self.discovery_images = list(concept_dir.iterdir())
+        
+        if concepts is None:
+            concepts = self.dic[bn]['concepts'] + [self.random_concept]
+            
+        elif not isinstance(concepts, list) and not isinstance(concepts, tuple):
+            concepts = [concepts]
+            
+        num_concepts = len(concepts)
+        plt.rcParams['figure.figsize'] = num * 2.1, 4.3 * num_concepts
+        
+        fig = plt.figure(figsize=(num * 2, 4 * num_concepts))
+        outer = gridspec.GridSpec(num_concepts, 1, wspace=0., hspace=0.3)
+        
+        for n, concept in enumerate(concepts):
+                
+            inner = gridspec.GridSpecFromSubplotSpec(
+                2, num, subplot_spec=outer[n], wspace=0, hspace=0.1)
+            
+            if concept == self.random_concept:
+                concept_images = list((self.discovered_concepts_dir / "Random" / self.random_concept / "superpixels").iterdir())
+                concept_patches = list((self.discovered_concepts_dir / "Random" / self.random_concept / "patches").iterdir())
+                concept_image_numbers = [img.name for img in concept_images]
+            else:
+                concept_images = self.dic[bn][concept]['images']
+                concept_patches = self.dic[bn][concept]['patches']
+                concept_image_numbers = self.dic[bn][concept]['image_numbers']
+                
+            if mode == 'max':
+                idxs = np.arange(len(concept_images))
+            elif mode == 'random':
+                idxs = np.random.permutation(np.arange(len(concept_images)))
+            elif mode == 'diverse':
+                idxs = []
+                while True:
+                    seen = set()
+                    for idx in range(len(concept_images)):
+                        discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
+                        if discovery_image_num not in seen and idx not in idxs:
+                            seen.add(discovery_image_num)
+                            idxs.append(idx)
+                    if len(idxs) == len(concept_images):
+                        break
+            else:
+                raise ValueError('Invalid mode!')
+            idxs = idxs[:num]
+            for i, idx in enumerate(idxs):
+                ax = plt.Subplot(fig, inner[i])
+                img = Image.open(concept_images[idx])
+                ax.imshow(img)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                if i == int(num / 2):
+                    ax.set_title(concept)
+                ax.grid(False)
+                fig.add_subplot(ax)
+                ax = plt.Subplot(fig, inner[i + num])
+                
+                concept_patch = np.array(Image.open(concept_patches[idx]))
+                
+                mask = 1 - (np.mean(concept_patch == float(
+                    self.average_image_value) / 255, -1) == 1)
+                discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
+                image = load_image_from_file(self.discovery_images[discovery_image_num], self.resize_dims)
+                ax.imshow(mark_boundaries(image, mask, color=(1, 1, 0), mode='thick'))
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_title(str(concept_image_numbers[idx]))
+                ax.grid(False)
+                fig.add_subplot(ax)
+        plt.suptitle(bn)
+        
+    
+        with open(self.output_dir / (bn + '_concepts.png'), 'wb') as f:
+            fig.savefig(f)
+        plt.clf()
+        plt.close(fig)
+
+    def plot_influential_concepts(self, bn, num=30, images_per_row=10, num_random_images=5, mode='diverse', concepts=None):
+        """Plots examples of discovered influential concepts.
+
+        Args:
+        cd: The concept discovery instance
+        bn: Bottleneck layer name
+        num: Number of images to print out of each concept
+        address: If not None, saves the output to the address as a .PNG image
+        mode: If 'diverse', it prints one example of each of the target class images
+          is coming from. If 'radnom', randomly samples exmples of the concept. If
+          'max', prints out the most activating examples of that concept.
+        concepts: If None, prints out examples of all discovered concepts.
+          Otherwise, it should be either a list of concepts to print out examples of
+          or just one concept's name
+
+        Raises:
+        ValueError: If the mode is invalid.
+        """
+        
+        plot_dir = self.output_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        
+        # If we don't have the concept dictionary, load it in.
+        if not hasattr(self, "dic"):
+            self.load_concept_dict()
+        
+        if not hasattr(self, "discovery_images"):
+
+            # Get the list of discovery image paths.
+            concept_dir = self.source_dir / self.target_class / "context_discovery"
+            
+            # Save the list of discovery images paths
+            self.discovery_images = list(concept_dir.iterdir())
+        
+        if concepts is None:
+            concepts = self.dic[bn]['concepts']
+            
+        elif not isinstance(concepts, list) and not isinstance(concepts, tuple):
+            concepts = [concepts]
+            
+        num_concepts = len(concepts)
+        
+        # Open the concept dictionary file and save it to self.dic
+        with open(self.cav_dir / 'tcav_scores.pkl', 'rb') as handle:
+            scores = pickle.load(handle)
+        
+        # We want 10 images in a row,
+        rows = math.ceil(num / images_per_row)
+        plt.rcParams['figure.figsize'] = images_per_row * 2.1, 4.3 * rows
+        
+        with open(self.output_dir / "plots" / "scores_and_random_selection.txt", "a") as f:
+            f.write(f"\n\n\t\t\t ---Concept Score and Randomly Selected Patches for {bn}---\n\n")
+        
+        for n, concept in enumerate(concepts):
+            
+            pvalue = self.do_statistical_testings(scores[bn][concept], scores[bn][self.random_concept])
+            tcav_score = np.mean(scores[bn][concept])
+            
+            if pvalue > 0.1 or tcav_score < 0.7:
+                continue
+            
+            fig = plt.figure(figsize=(images_per_row * 2.1, 4.3 * rows))
+            outer = gridspec.GridSpec(rows, 1, wspace=0., hspace=0.4)
+            
+            if concept == self.random_concept:
+                concept_images = list((self.discovered_concepts_dir / "Random" / self.random_concept / "superpixels").iterdir())
+                concept_patches = list((self.discovered_concepts_dir / "Random" / self.random_concept / "patches").iterdir())
+                concept_image_numbers = [img.name for img in concept_images]
+            else:
+                concept_images = self.dic[bn][concept]['images']
+                concept_patches = self.dic[bn][concept]['patches']
+                concept_image_numbers = self.dic[bn][concept]['image_numbers']
+                
+            if mode == 'max':
+                idxs = np.arange(len(concept_images))
+            elif mode == 'random':
+                idxs = np.random.permutation(np.arange(len(concept_images)))
+            elif mode == 'diverse':
+                idxs = []
+                while True:
+                    seen = set()
+                    for idx in range(len(concept_images)):
+                        discovery_image_num = int(concept_image_numbers[idx].split("_")[0])
+                        if discovery_image_num not in seen and idx not in idxs:
+                            seen.add(discovery_image_num)
+                            idxs.append(idx)
+                    if len(idxs) == len(concept_images):
+                        break
+            else:
+                raise ValueError('Invalid mode!')
+                
+            idxs = idxs[:num - num_random_images]
+            
+            patches_sample = random.sample(list((self.discovered_concepts_dir / "patches").iterdir()), num_random_images)
+            current_concept_patches = np.concatenate([concept_patches[idxs], patches_sample])
+            shuffled_concept_patches = np.random.shuffle(current_concept_patches)
+            
+            with open(self.output_dir / "plots" / "scores_and_random_selection.txt", "a") as f:
+                samples_joined = ", ".join([p.name for p in patches_sample])
+                f.write(f"{bn}_{concept}\n")
+                f.write(f"TCAV score {tcav_score}, p-value {pvalue}\n")
+                f.write(f"Random patches: {samples_joined}\n\n")
+                
+            [p.name for p in patches_sample]
+            
+            
+            for i, patch in enumerate(current_concept_patches):
+                
+                current_column = i % images_per_row
+                
+                if current_column == 0:
+                    inner = gridspec.GridSpecFromSubplotSpec(
+                        2, images_per_row, subplot_spec=outer[i // images_per_row], wspace=0, hspace=0.2)
+                
+                ax = plt.Subplot(fig, inner[current_column])
+                img = Image.open(patch)
+                ax.imshow(img)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_title(i)
+                ax.grid(False)
+                fig.add_subplot(ax)
+                ax = plt.Subplot(fig, inner[current_column + images_per_row])
+                
+                discovery_image_num = int(patch.name.split("_")[0])
+                image = Image.open(self.discovery_images[discovery_image_num]).resize(self.resize_dims, Image.BILINEAR)
+                draw = ImageDraw.Draw(image)
+            
+                new_height, new_width = self.resize_dims
+                
+                draw.rectangle([(new_height/4, new_width/4), ((new_height/4) * 3, (new_width/4) * 3)], outline="black", width=2)
+                image = np.array(image)
+                ax.imshow(image)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_title(patch.name.split(".")[0])
+                ax.grid(False)
+                fig.add_subplot(ax)
+                
+            plt.suptitle(bn + " " + concept)
+        
+    
+            with open(self.output_dir / "plots" / (bn + "_" + concept + ".png"), 'wb') as f:
+                fig.savefig(f)
+            plt.clf()
+            plt.close(fig)
