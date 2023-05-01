@@ -187,7 +187,7 @@ class DeconvBottleneck(nn.Module):
         self.conv3 = nn.Conv2d(out_channels, out_channels * self.expansion,
                                kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
-        self.relu = nn.ReLU()
+        self.relu = nn.ReLU(inplace=True)
         self.upsample = upsample
 
     def forward(self, x):
@@ -259,6 +259,7 @@ class ResNetAE(nn.Module):
         self.uplayer2 = self._make_up_block(decode_block, 256, layers[2], stride=2)
         self.uplayer3 = self._make_up_block(decode_block, 128, layers[1], stride=2)
         self.uplayer4 = self._make_up_block(decode_block, 64, layers[0], stride=2)
+        # self.uplayer5 = self._make_up_block(decode_block, 32, 2, stride=2)
 
         upsample = nn.Sequential(
             nn.ConvTranspose2d(self.inplanes, 64, kernel_size=1, stride=2, bias=False, output_padding=1),
@@ -267,7 +268,7 @@ class ResNetAE(nn.Module):
 
         self.uplayer_top = DeconvBottleneck(self.inplanes, 64, 1, 2, upsample)
 
-        self.conv1_1 = nn.ConvTranspose2d(64, 3, kernel_size=1, stride=2, bias=False)
+        self.conv1_1 = nn.ConvTranspose2d(64, 3, kernel_size=1, stride=1, bias=False)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -374,23 +375,17 @@ class ResNetAE(nn.Module):
         x = self.layer3(x, additional_values[2])
         x = self.layer4(x, additional_values[3])
 
-        # If we are using this backbone normally, carry out the additional steps.
-        # Otherwise, leave the output to be the output from the last bottleneck layer for use in a decoder.
-        # if not any(additional_values) or decoder_output:
-        #     x = self.avgpool(x)
-        #     x = torch.flatten(x, 1)
-        #     x = self.fc(x)
-
         return x
 
     def encode(self, x: Tensor, additional_values: [Tensor] = [None, None, None, None]) -> Tensor:
         return self._forward_encode(x, additional_values)
 
-    def _forward_decode(self, x: Tensor, image_size=[1, 3, 800, 800]):
+    def _forward_decode(self, x: Tensor, image_size=[1, 3, 400, 400]):
         x = self.uplayer1(x)
         x = self.uplayer2(x)
         x = self.uplayer3(x)
         x = self.uplayer4(x)
+        # x = self.uplayer5(x)
 
         x = self.uplayer_top(x)
 
@@ -452,5 +447,3 @@ def resnet50(**kwargs: Any) -> ResNetAE:
     # weights = ResNet50_Weights.verify(weights)
 
     return _resnet(Bottleneck, DeconvBottleneck, [3, 4, 6, 3], **kwargs)
-
-
