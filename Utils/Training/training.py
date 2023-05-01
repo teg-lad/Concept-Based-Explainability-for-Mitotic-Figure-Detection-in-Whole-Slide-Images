@@ -8,9 +8,11 @@ from pathlib import Path
 from tqdm import tqdm
 import math
 from datetime import datetime
+import pickle
 
 import torch
 from torch.utils.data import DataLoader
+import torchvision.transforms as T
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 import Utils.Training.utils as utils
@@ -251,3 +253,142 @@ def train(model, dataset, num_epochs, output_dir, writer, checkpoint=None):
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
         }, path_to_save)
+
+
+def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs=10, bs=2, lr=0.1, momentum=0.9,
+             output_path=None, **kwargs):
+    output_path = Path(output_path)
+    output_path.mkdir(exist_ok=True, parents=True)
+
+    # Train on the GPU or on the CPU, if a GPU is not available.
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    # Move the model to the device
+    model.to(device)
+
+    # Split the dataset in train and test set.
+    # Note: Using torch.manual_seed(42) ensures we get the same train and test split for each run of this method.
+    torch.manual_seed(42)
+    indices = torch.randperm(len(dataset)).tolist()
+    dataset_train = torch.utils.data.Subset(dataset, indices[:-750])
+    dataset_test = torch.utils.data.Subset(dataset, indices[-750:])
+
+    torch.manual_seed(42)
+    # Define training and test data loaders.
+    data_loader = torch.utils.data.DataLoader(
+        dataset_train, batch_size=bs, shuffle=False, collate_fn=utils.collate_fn)
+
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test, batch_size=bs, shuffle=False, collate_fn=utils.collate_fn)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum)
+    criterion = torch.nn.MSELoss()
+
+    torch.cuda.empty_cache()
+
+    # Resize
+    resize_transform = T.Resize((400, 400))
+
+    # training cycle
+    loss = None  # just to avoid reference before assigment
+    history = {'tr_loss': [], 'val_loss': []}
+    for epoch in range(num_epochs):
+        # training
+        model.train()
+        tr_loss = 0
+
+        # Iterate through the training data loader
+        for iteration, data in tqdm(enumerate(data_loader), total=len(data_loader)):
+            # zero the gradient
+            optimizer.zero_grad()
+
+            # Pull the images and target from the data tuple
+            images, _ = data
+            images = images.to(device)
+
+            # Transform the images.
+            transformed_images, _ = transform(images, _)
+            transformed_images = transformed_images.tensors
+
+            # Move the data to the device the computation should happen on
+            # transformed_images = transformed_images.to(device)
+
+            # Calculate the outputs.
+            outputs = model(transformed_images)
+
+            # transformed_images = resize_transform(transformed_images)
+            inverse_transformed_output = inv_transform(outputs)
+
+            # compute loss (flatten output in case of ConvAE. targets already flat)
+            loss = criterion(inverse_transformed_output, images)
+            tr_loss += loss.item()
+
+            # propagate back the loss
+            loss.backward()
+            optimizer.step()
+
+        last_batch_loss = loss.item()
+        tr_loss /= len(data_loader)
+        history['tr_loss'].append(round(tr_loss, 5))
+
+        # validation
+        val_loss = evaluate_ae(model, criterion, data_loader=data_loader_test, transform=transform, inv_transform=inv_transform, device=device)
+        history['val_loss'].append(round(val_loss, 5))
+        torch.cuda.empty_cache()
+
+        # Get the current timestamp for saving the model.
+        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+        # Create the path to save the model to.
+        path_to_save = output_path / f"ResNetAE_{timestamp}_{epoch}.pth"
+
+        # Define what variables are to be saved to the file.
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, path_to_save)
+
+        metrics_path = output_path / f"ResNetAE_{timestamp}_{epoch}_metrics.pkl"
+
+        with open(metrics_path, 'wb') as handle:
+            pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        # simple early stopping mechanism
+        if epoch >= 10:
+            last_values = history['val_loss'][-10:]
+            if last_values[-3] < last_values[-2] < last_values[-1]:
+                return history
+
+    return history
+
+
+def evaluate_ae(model, criterion, data_loader=None, transform=None, inv_transform=None, device=None, **kwargs):
+    """ Evaluate the model """
+
+    # evaluate
+    model.to(device)
+    model.eval()
+    with torch.no_grad():
+        val_loss = 0
+        for iteration, data in tqdm(enumerate(data_loader), total=len(data_loader), desc="Evaluating Model"):
+            # Pull the images and target from the data tuple
+            images, _ = data
+            images = images.to(device)
+
+            # Transform the images.
+            transformed_images, _ = transform(images, _)
+            transformed_images = transformed_images.tensors
+
+            # transformed_images = transformed_images.to(device)
+
+            # Calculate the outputs.
+            outputs = model(transformed_images)
+
+            inv_transformed_output = inv_transform(outputs)
+
+            # flatten outputs in case of ConvAE (targets already flat)
+            loss = criterion(inv_transformed_output, images)
+            val_loss += loss.item()
+
+    return val_loss / len(data_loader)
