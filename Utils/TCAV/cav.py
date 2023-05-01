@@ -207,7 +207,7 @@ def load_or_train_cav(concepts, layer_name, save_path, hparams=None, activations
     if not overwrite and cav_path.is_file():
 
         # Open and load the CAV.
-        cav_instance = CAV.load_cav(cav_path)
+        cav_instance = load_cav(cav_path)
 
         # Return the CAV instance.
         return cav_instance
