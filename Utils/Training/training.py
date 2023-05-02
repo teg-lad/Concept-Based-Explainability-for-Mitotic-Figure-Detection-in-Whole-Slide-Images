@@ -256,12 +256,29 @@ def train(model, dataset, num_epochs, output_dir, writer, checkpoint=None):
 
 
 def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs=10, bs=2, lr=0.1, momentum=0.9,
-             output_path=None, **kwargs):
+             output_path=None, checkpoint=None, **kwargs):
+
     output_path = Path(output_path)
     output_path.mkdir(exist_ok=True, parents=True)
 
+    loss = None  # just to avoid reference before assigment
+    history = {'tr_loss': [], 'val_loss': []}
+
+    if checkpoint:
+        checkpoint_path = Path(checkpoint)
+        metrics_path = Path(checkpoint.rsplit(".", 1)[0] + "_metrics.pkl")
+
+        checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+
+        # Open the activation file and read it in.
+        with open(metrics_path, 'rb') as handle:
+            history = pickle.load(handle)
+
     # Train on the GPU or on the CPU, if a GPU is not available.
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    if checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
 
     # Move the model to the device
     model.to(device)
@@ -284,15 +301,19 @@ def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum)
     criterion = torch.nn.MSELoss()
 
+    current_epoch = 0
+
+    if checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        current_epoch = checkpoint['epoch'] + 1
+        del checkpoint
+
     torch.cuda.empty_cache()
 
     # Resize
-    resize_transform = T.Resize((400, 400))
+    # resize_transform = T.Resize((400, 400))
 
-    # training cycle
-    loss = None  # just to avoid reference before assigment
-    history = {'tr_loss': [], 'val_loss': []}
-    for epoch in range(num_epochs):
+    for epoch in range(current_epoch, current_epoch + num_epochs):
         # training
         model.train()
         tr_loss = 0
@@ -355,10 +376,10 @@ def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs
             pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         # simple early stopping mechanism
-        if epoch >= 10:
-            last_values = history['val_loss'][-10:]
-            if last_values[-3] < last_values[-2] < last_values[-1]:
-                return history
+        # if epoch >= 10:
+        #     last_values = history['val_loss'][-10:]
+        #     if last_values[-3] < last_values[-2] < last_values[-1]:
+        #         return history
 
     return history
 
