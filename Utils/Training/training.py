@@ -255,7 +255,7 @@ def train(model, dataset, num_epochs, output_dir, writer, checkpoint=None):
         }, path_to_save)
 
 
-def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs=10, bs=2, lr=0.1, momentum=0.9,
+def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs=10, bs=2, lr=0.5, momentum=0.,
              output_path=None, checkpoint=None, **kwargs):
 
     output_path = Path(output_path)
@@ -278,7 +278,7 @@ def train_ae(model, dataset=None, transform=None, inv_transform=None, num_epochs
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     if checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
     # Move the model to the device
     model.to(device)
