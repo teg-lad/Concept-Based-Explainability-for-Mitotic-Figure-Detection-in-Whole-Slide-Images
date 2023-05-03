@@ -261,14 +261,14 @@ class ResNetAE(nn.Module):
         self.uplayer4 = self._make_up_block(decode_block, 64, layers[0], stride=2)
         # self.uplayer5 = self._make_up_block(decode_block, 32, 2, stride=2)
 
-        upsample = nn.Sequential(
-            nn.ConvTranspose2d(self.inplanes, 64, kernel_size=1, stride=2, bias=False, output_padding=1),
-            nn.BatchNorm2d(64),
-        )
+        # upsample = nn.Sequential(
+        #     nn.ConvTranspose2d(self.inplanes, 64, kernel_size=1, stride=2, bias=False, output_padding=1),
+        #     nn.BatchNorm2d(64),
+        # )
+        #
+        # self.uplayer_top = DeconvBottleneck(self.inplanes, 64, 1, 2, upsample)
 
-        self.uplayer_top = DeconvBottleneck(self.inplanes, 64, 1, 2, upsample)
-
-        self.conv1_1 = nn.ConvTranspose2d(64, 3, kernel_size=1, stride=1, bias=False)
+        self.conv1_1 = nn.ConvTranspose2d(128, 3, kernel_size=1, stride=1, bias=False)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -380,14 +380,14 @@ class ResNetAE(nn.Module):
     def encode(self, x: Tensor, additional_values: [Tensor] = [None, None, None, None]) -> Tensor:
         return self._forward_encode(x, additional_values)
 
-    def _forward_decode(self, x: Tensor, image_size=[1, 3, 400, 400]):
+    def _forward_decode(self, x: Tensor, image_size=[1, 3, 200, 200]):
         x = self.uplayer1(x)
         x = self.uplayer2(x)
         x = self.uplayer3(x)
         x = self.uplayer4(x)
         # x = self.uplayer5(x)
 
-        x = self.uplayer_top(x)
+        # x = self.uplayer_top(x)
 
         x = self.conv1_1(x, output_size=image_size)
 
