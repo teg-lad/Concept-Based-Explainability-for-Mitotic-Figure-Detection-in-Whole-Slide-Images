@@ -1621,7 +1621,7 @@ class ConceptDiscovery(object):
             patches_sample = random.sample(list((self.discovered_concepts_dir / "patches").iterdir()),
                                            num_random_images)
             current_concept_patches = np.concatenate([concept_patches[idxs], patches_sample])
-            shuffled_concept_patches = np.random.shuffle(current_concept_patches)
+            np.random.shuffle(current_concept_patches)
 
             with open(self.output_dir / "plots" / "scores_and_random_selection.txt", "a") as f:
                 samples_joined = ", ".join([p.name for p in patches_sample])
@@ -1629,9 +1629,7 @@ class ConceptDiscovery(object):
                 f.write(f"TCAV score {tcav_score}, p-value {pvalue}\n")
                 f.write(f"Random patches: {samples_joined}\n\n")
 
-            [p.name for p in patches_sample]
-
-            for i, patch in enumerate(shuffled_concept_patches):
+            for i, patch in enumerate(current_concept_patches):
 
                 current_column = i % images_per_row
 
