@@ -144,8 +144,7 @@ class Bottleneck(nn.Module):
 
         out = self.conv1(x)
 
-        if additional_value:
-            additional_value = torch.unflatten(additional_value, 1, out.shape)
+        if additional_value is not None:
             out += additional_value
 
         out = self.bn1(out)
