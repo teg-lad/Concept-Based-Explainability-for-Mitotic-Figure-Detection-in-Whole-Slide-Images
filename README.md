@@ -17,7 +17,7 @@ Advances in Artificial Intelligence (AI) are allowing the performance of models 
 
 #### Google Drive
 
-The Google Drive folder can be found [here](https://drive.google.com/drive/folders/1xoxOql6JeDOZBHS6p5Cs1l53mUMesJSG?usp=sharing). It contains a link to the original MIDOG data, the training data, the discovery data and the results.
+The Google Drive folder can be found [here](https://drive.google.com/drive/folders/1xoxOql6JeDOZBHS6p5Cs1l53mUMesJSG?usp=sharing). It contains a link to the original MIDOG data, the training data, the discovery data, the results and saves of the models I used.
 
 #### Notebooks
 + [Data Loading](Data_loading_and_preprocessing.ipynb)
