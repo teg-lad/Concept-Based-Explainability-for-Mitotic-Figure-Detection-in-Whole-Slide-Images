@@ -12,6 +12,7 @@ Advances in Artificial Intelligence (AI) are allowing the performance of models 
 
 #### Documents
 + [Conference Paper](docs/Explainable%20AI%20in%20Pathology%20-%20Concept%20Based%20Explainability%20for%20Mitotic%20Figure%20Detection%20in%20Whole%20Slide%20Images.pdf)
++ [Expo Poster](docs/poster.pdf)
 + [Project Proposal](docs/Adam_Tegart_19327493_FYP_Proposal.pdf)
 + [Questionnaire](docs/questionnaire.pdf)
 
@@ -27,8 +28,11 @@ The Google Drive folder can be found [here](https://drive.google.com/drive/folde
 
 There are addtional utility files in the Utils folder. These are commented and used in the above notebooks.
 
+### Plots of Results
 
-#### Generated GIFs
+![Plots of TCAV Scores against p-values](images/scores_p_values.png)
+
+### Generated GIFs
 
 ##### Gradient only
 ![Gifsplanation with influential concept](images/Reconstructions/gradient_only/0.GIF)
