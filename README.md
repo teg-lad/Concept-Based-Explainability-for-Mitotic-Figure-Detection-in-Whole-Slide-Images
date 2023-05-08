@@ -15,6 +15,7 @@ Advances in Artificial Intelligence (AI) are allowing the performance of models 
 + [Expo Poster](docs/poster.pdf)
 + [Project Proposal](docs/Adam_Tegart_19327493_FYP_Proposal.pdf)
 + [Questionnaire](docs/questionnaire.pdf)
++ [Ethics Form](docs/ethics.pdf)
 
 #### Google Drive
 
